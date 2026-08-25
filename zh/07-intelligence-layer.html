@@ -52,7 +52,8 @@
       <li>能用 ReteEngine 写一条 AML 规则并解释 Rete 网络为什么快（以及 Semantica 实现的已知局限）</li>
       <li>能用 DatalogReasoner 写递归规则（ancestor 例），并说明「解释生成」的可问责价值</li>
       <li>能用 ProvenanceManager 追溯一个实体的来源（track_entity / get_lineage / trace_lineage）</li>
-      <li>能描述决策生命周期五步（record → link → query → govern → audit），并区分三个正交查询方向</li>
+      <li>能描述决策生命周期五步（record → link → query → govern → audit），并区分三个正交查询方向
+          ——能说出每个方向背后的真实机器（走边 / 索引扩散 / 词重叠）</li>
     </ul>
   </div>
 
@@ -224,7 +225,8 @@ graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
   <ul>
     <li><strong>向上</strong>：<code>trace_decision_chain(id)</code> 追完整因果祖先——「为什么会走到这一步」；</li>
     <li><strong>向下</strong>：<code>analyze_decision_impact(id)</code> 看下游影响面——「这个决定影响了什么」；</li>
-    <li><strong>横向</strong>：<code>find_similar_decisions("...")</code> 语义先例检索——「以前类似情况怎么处理的」。</li>
+    <li><strong>横向</strong>：<code>find_similar_decisions("...")</code> 先例检索——「以前类似情况怎么处理的」
+        （实际配方是词重叠相似度，见下方对照真码）。</li>
   </ul>
 
   <p>
@@ -234,6 +236,101 @@ graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
     （decision_recorder / decision_models / causal_analyzer / policy_engine / decision_query）——
     但统一从 ContextGraph 的方法面暴露。
   </p>
+
+  <p>
+    读懂这套东西的第一步是<strong>祛魅</strong>：decisions 模块<strong>不做任何决策</strong>。
+    拍板的永远是外部——人、规则引擎、或你的业务系统；这个模块的工作是把每一次
+    <em>已经发生</em> 的决策变成图上的结构化节点，让它们可连接、可查询、可审计。
+    名字里的「智能」指的是<strong>积累之后可追问</strong>，不是有一个 AI 在替你思考。
+    下面把整台机器拆开（全部核对过 <code>context_graph.py</code> 源码）。
+  </p>
+
+  <div class="box" style="border-left-color:var(--pass);">
+    <div class="box-title">✓ 对照真码：一次决策的完整旅程——四步全是字典、索引与走边</div>
+
+    <p style="margin:.5rem 0 .3rem;"><strong>第一步 record_decision（context_graph.py:4078）：一次入库，存进四个容器。</strong></p>
+    <p style="margin:.3rem 0;">
+      参数校验（字段长度上限、confidence 必须在 0–1）之后，组装一个字典：uuid 生成 ID，
+      记录你给的全部字段 + 时间戳，还有 <strong>valid_from / valid_until</strong>——决策也带双时间态，
+      「这条决定当时有效、三个月后过期」是可以显式表达的。然后这个字典被写进四个地方：
+      图上一个 <code>node_type="decision"</code> 的节点、<code>_decisions</code> 主字典、
+      两个<strong>倒排索引</strong>（<code>category → 决策ID集合</code> 与 <code>entity → 决策ID集合</code>）、
+      一个按时间排序的索引。没有推断，没有模型——但那两个倒排索引是后面一切查询的地基。
+    </p>
+
+    <p style="margin:.5rem 0 .3rem;"><strong>第二步 add_causal_relationship：加一条普通边。</strong></p>
+    <p style="margin:.3rem 0;">
+      类型归一（别名表）+ 校验两端都是 decision 节点，然后在图上连一条带类型的边。
+      至此「d1 初审 → d2 批准 → d3 定价」就是三条平平无奇的边。
+    </p>
+
+    <p style="margin:.5rem 0 .3rem;"><strong>第三步 三个查询方向——用的根本是三种不同机器。</strong></p>
+    <table>
+      <thead><tr><th>方向</th><th>实际机制</th><th>回答</th></tr></thead>
+      <tbody>
+        <tr><td><strong>向上</strong> trace</td><td>沿因果边反向 <strong>BFS 走图</strong>（限深 max_steps），拼祖先链</td><td>为什么会走到这一步</td></tr>
+        <tr><td><strong>向下</strong> impact</td><td><strong>不走因果边</strong>——从倒排索引扩散：碰过相同实体的决策（查 <code>_entity_index</code>）∪ 同 category 的决策（查 <code>_decision_index</code>），显式因果边作补充</td><td>这个决定影响了什么</td></tr>
+        <tr><td><strong>横向</strong> similar</td><td>索引圈定候选 → 逐个把 scenario+reasoning+entities <strong>分词算词重叠率</strong> → 加权排序（配方见下一个盒子）</td><td>以前类似情况怎么处理</td></tr>
+      </tbody>
+    </table>
+    <p style="margin:.3rem 0;">
+      「影响面 = 碰过同一批东西的所有决策」——这是设计选择而非偷懒：影响往往通过共享实体发生
+      （同一个申请人、同一份合同），光走显式因果边会漏掉大量隐性影响。
+    </p>
+
+    <p style="margin:.5rem 0 .3rem;"><strong>第四步 治理：策略本身也是带版本的记录。</strong></p>
+    <p style="margin:.3rem 0;">
+      PolicyEngine（<code>context/policy_engine.py</code>）里策略不是硬编码的 if，而是
+      <code>Policy</code> 记录（rules 字典 + category + <strong>version</strong>）。检查 = 拿策略的 rules
+      评估决策数据；更关键的是它会记录<strong>「这条决策当时适用的是策略的哪个版本」</strong>
+      （图上连一条 <code>APPLIED_POLICY</code> 边），还支持记<strong>例外</strong>（PolicyException：
+      谁批准的豁免、理由、时间戳）。监管审计问「当时按哪版规则批的、谁豁免的」，
+      答案都在图上。
+    </p>
+  </div>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 对照真码：「语义先例检索」的真实配方是词重叠</div>
+    <p style="margin:.3rem 0;">
+      <code>find_similar_decisions</code> 的签名里有 <code>use_semantic_search=True</code>，
+      文档字符串说 "hybrid search…vector embeddings"——但追到最底层
+      <code>_calculate_decision_content_similarity</code>（<code>context_graph.py</code>），
+      实际计算是：
+    </p>
+    <pre><code>scenario_words = set(scenario.lower().split())     # 分词
+decision_words = set(场景+推理+实体 拼起来.split())
+return len(交集) / len(并集)                      # Jaccard 词重叠率</code></pre>
+    <p style="margin:.3rem 0;">
+      <strong>没有任何嵌入向量，<code>use_semantic_search</code> 参数收而不用</strong>（第 13 章会再遇到这个模式）。
+      最终分数 = 0.7 × 词重叠 + 0.3 × 图结构相似度，而结构相似度藏在默认关闭的
+      <code>advanced_analytics</code> 配置后面——开箱即用时就是纯词重叠在排名。
+      实际含义：「谁的描述里重合的词多，谁就是先例」。这对结构化场景描述（"loan, 31% DTI"）
+      够用，但别指望它理解同义改写——"auto loan" 和 "car credit" 的相似度是 0。
+    </p>
+  </div>
+
+  <div class="box" style="border-left-color:var(--accent-2);">
+    <div class="box-title">◇ 四件套的 LLM 审计：核心机器全是确定性的</div>
+    <p style="margin:.3rem 0;">
+      把四件套代码里所有可能调 LLM 的入口搜一遍，结论：
+    </p>
+    <ul style="margin:.3rem 0;">
+      <li><strong>reasoning 三引擎</strong>（前向链/Rete/Datalog）：纯规则运算，零 LLM；</li>
+      <li><strong>provenance</strong>：全模块零 LLM 引用，纯 SQLite 记账；</li>
+      <li><strong>decisions</strong>：记录/因果/三向查询全纯 Python；</li>
+      <li><strong>context</strong>：唯一的 LLM 触点是查询方法<strong>可选注入</strong>的
+          <code>llm_provider</code>（来自 <code>semantica.llms</code> 包），用来把多跳检索结果组织成自然语言回答——
+          不传就没有，核心检索不依赖它；</li>
+      <li>⚠️ 唯一例外：<code>reasoning/graph_reasoner.py</code> 的 <code>GraphReasoner</code>——
+          三引擎之外的第 7 个类，明确「leverages LLMs」做自然语言图推理，默认初始化 openai provider。
+          本书的三引擎叙事没有覆盖它。</li>
+    </ul>
+    <p style="margin:.3rem 0;">
+      这与第 6 章抽取层的 ml/pattern/llm 分层是同一个世界观：<strong>语言理解花钱且不可复现，
+      只当可选增强，不当地基</strong>。Rete 引擎是机器替你做决定，decisions 是机器替你记住每个决定——
+      两者进同一个「四件套」，说的是「决定 + 记账」这对监管标配，不是说你有一个会思考的决策 AI。
+    </p>
+  </div>
 
   <div class="demo" data-demo="decisionGraph">
     <div class="demo-title">动手试 — 决策图的三个正交查询</div>
@@ -279,16 +376,20 @@ graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
         get_lineage/trace_lineage 回溯；去重的 preserve_provenance 保的就是它。</li>
     <li><strong>decisions</strong>：决策是一等节点；因果边枚举（CAUSED/INFLUENCED/PRECEDENT_FOR）+ 别名归一
         （context_graph.py:494-506）；生命周期 record→link→query→govern→audit；
-        三正交查询：trace 向上 / impact 向下 / similar 横向。</li>
+        三正交查询用的是三种不同机器：trace 走边 / impact 走倒排索引 / similar 算词重叠
+        （「语义检索」实为 Jaccard，嵌入参数收而不用）。四件套核心零 LLM，
+        例外是 GraphReasoner（默认 openai）与 context 查询的可选注入。</li>
     <li><strong>ontology = 四件套的语法层</strong>：另外三件引用的每个词汇的语义都由本体定义。</li>
   </ul>
 
-  <div class="box pitfalls">
+  <div class="box pitfall">
     <div class="box-title">常见误区</div>
     <ul style="margin:0;">
       <li><strong>把 ReteEngine 直接当生产合规门</strong>——README 明示 alpha 匹配器从简，先用自己的规则集验证。</li>
       <li><strong>期望推理器替你发现「逻辑矛盾」</strong>——Semantica 的推理器是规则引擎路线（加事实），
           逻辑冲突检测在 conflicts 模块（第 6 章）走的是另一条路。</li>
+      <li><strong>期望 decisions 模块替你做决策</strong>——它是决策的记账本与因果地图：记录、连线、查询、审计。
+          拍板的是外部（人/规则引擎/业务系统）。</li>
       <li><strong>把决策记录当日志写</strong>——decision 是图节点：不 link 因果边、不挂 provenance，
           trace/impact 就退化成空查询。记录时就要连线。</li>
       <li><strong>绕过 record_decision 自己建决策节点</strong>——绕过统一入口会错过类型约束、
@@ -303,7 +404,7 @@ graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
     <h2>第 7 章测试</h2>
 
     <div class="q" data-id="7-1" data-type="mcq" data-correct='["c"]'
-         data-answer="C —— 语义先例检索：横向找历史上相似场景的决策。"
+         data-answer="C —— 先例检索：横向找历史上相似场景的决策（词重叠相似度排序）。"
          data-rationale="A 是 trace_decision_chain（向上）；B 是 analyze_decision_impact（向下）；D 没有对应的单一 API（风险分析跨多个能力）。三个查询方向正交：trace 答为什么、impact 答影响了什么、similar 答以前怎么办。"
          data-review="sec-decisions">
       <div class="prompt"><span class="qnum">Q1.</span> 「以前遇到类似 31% DTI 的个人贷申请，当时怎么处理的？」——哪个 API 回答这个问题？</div>
@@ -406,7 +507,7 @@ graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
     </div>
 
     <div class="q" data-id="7-10" data-type="short"
-         data-key-points='["四件套四维度：模式/推断/出处/因果，共享 KG 字典输入，产出并回图","Rete 编译匹配网络增量求值（快）；已知局限 alpha 匹配器从简，生产前自验","provenance：PROV-O + track/get_lineage/trace_lineage，审计导出的原料","decisions：一等节点 + 因果边枚举（CAUSED/INFLUENCED/PRECEDENT_FOR）+ 三正交查询 + 五步生命周期","ontology 是四件套的语法层：其余三件引用词汇的语义锚点"]'
+         data-key-points='["四件套四维度：模式/推断/出处/因果，共享 KG 字典输入，产出并回图","Rete 编译匹配网络增量求值（快）；已知局限 alpha 匹配器从简，生产前自验","provenance：PROV-O + track/get_lineage/trace_lineage，审计导出的原料","decisions 不做决策：记录入库（四容器含两个倒排索引）+ 因果边 + 三种机器的查询（走边/索引扩散/词重叠）+ 带版本的策略治理","四件套核心零 LLM：例外是 GraphReasoner 与 context 查询的可选 llm_provider 注入","ontology 是四件套的语法层：其余三件引用词汇的语义锚点"]'
          data-answer="智能层四件套在 KG 之上各加一维：ontology 加模式（类/属性/约束——其余三件的语法层），reasoning 加推断（前向链、Rete 网络——编译匹配状态增量求值、Datalog 递归规则；Rete 的 alpha 匹配器目前刻意从简，生产合规门前须自验），provenance 加出处（PROV-O 结构化溯源：track_entity/track_relationship 记录、get_lineage/trace_lineage 回溯），decisions 加因果（决策是一等节点，因果边仅 CAUSED/INFLUENCED/PRECEDENT_FOR 三枚举并带别名归一；生命周期 record→link→query→govern→audit；trace 向上、impact 向下、similar 横向三个正交查询）。四者共享 KG 字典，产出并回图构成 Enriched KG。"
          data-rationale="五个要点：四维度、Rete 机制与局限、provenance API、决策体系、ontology 的语法层角色。"
          data-review="sec-recap">
