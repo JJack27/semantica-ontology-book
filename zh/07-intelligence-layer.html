@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 7 章 — 智能层四件套</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 7 章 · 第二部分：repo 全景</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="7">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 7 · 第二部分：Semantica repo 全景</div>
+    <h1>智能层四件套：Ontology · Reasoning · Provenance · Decisions</h1>
+    <p class="lede">
+      流水线造出 KG 之后，四个模块在它之上各加一个维度：<strong>ontology</strong> 加「模式」、
+      <strong>reasoning</strong> 加「推断」、<strong>provenance</strong> 加「出处」、
+      <strong>decisions</strong> 加「因果」。合起来就是架构图里的「Enriched KG」。
+      本章把四个都过一遍手感（ontology 只点到为止——它是第三部分整块的主角），
+      并揭示一个贯穿性事实：四件套的每个能力都在第 1–4 章的理论里有根。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能说出四件套各自给 KG 增加的维度，以及它们共享的输入（KG 字典）</li>
+      <li>能用 ReteEngine 写一条 AML 规则并解释 Rete 网络为什么快（以及 Semantica 实现的已知局限）</li>
+      <li>能用 DatalogReasoner 写递归规则（ancestor 例），并说明「解释生成」的可问责价值</li>
+      <li>能用 ProvenanceManager 追溯一个实体的来源（track_entity / get_lineage / trace_lineage）</li>
+      <li>能描述决策生命周期五步（record → link → query → govern → audit），并区分三个正交查询方向</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-layer-overview">7.1 四件套协作总览</h2>
+
+  <p>
+    四个模块都吃同一样东西——KG 字典，各自产出可并回图的结构：
+    ontology 产出类/属性/SHACL（模式层）；reasoning 产出推断出的事实与解释；
+    provenance 产出「每个事实从哪来」的链条；decisions 把 AI 的选择变成带因果边的一等节点。
+    监管故事「为什么这个 AI 批了这笔贷款」需要四者合奏：决策记录（d）挂推理链（r），
+    引用的实体有出处（p），而所有类型/约束来自本体（o）。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="智能层四件套">
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="160" y="200" width="400" height="56" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="360" y="226" text-anchor="middle" font-size="14" font-weight="700">Knowledge Graph（KG 字典）</text>
+      <text style="fill:var(--fg-dim)" x="360" y="246" text-anchor="middle" font-size="10">entities + relationships（+ 双时间态事实）</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="20" y="40" width="160" height="120" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="100" y="66" text-anchor="middle" font-size="13" font-weight="700">★ ontology</text>
+      <text style="fill:var(--fg-dim)" x="100" y="90" text-anchor="middle" font-size="10">加「模式」维度</text>
+      <text style="fill:var(--fg-dim)" x="100" y="110" text-anchor="middle" font-size="10">类/属性推断 · OWL 生成</text>
+      <text style="fill:var(--fg-dim)" x="100" y="130" text-anchor="middle" font-size="10">SHACL 治理（第三部分）</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="200" y="40" width="160" height="120" rx="10" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="280" y="66" text-anchor="middle" font-size="13" font-weight="700">reasoning</text>
+      <text style="fill:var(--fg-dim)" x="280" y="90" text-anchor="middle" font-size="10">加「推断」维度</text>
+      <text style="fill:var(--fg-dim)" x="280" y="110" text-anchor="middle" font-size="10">前向链 · Rete · Datalog</text>
+      <text style="fill:var(--fg-dim)" x="280" y="130" text-anchor="middle" font-size="10">SPARQL · 解释生成</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="380" y="40" width="160" height="120" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="460" y="66" text-anchor="middle" font-size="13" font-weight="700">provenance</text>
+      <text style="fill:var(--fg-dim)" x="460" y="90" text-anchor="middle" font-size="10">加「出处」维度</text>
+      <text style="fill:var(--fg-dim)" x="460" y="110" text-anchor="middle" font-size="10">W3C PROV-O 溯源</text>
+      <text style="fill:var(--fg-dim)" x="460" y="130" text-anchor="middle" font-size="10">每事实 → 源文档/页码/置信度</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="560" y="40" width="140" height="120" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="630" y="66" text-anchor="middle" font-size="13" font-weight="700">decisions</text>
+      <text style="fill:var(--fg-dim)" x="630" y="90" text-anchor="middle" font-size="10">加「因果」维度</text>
+      <text style="fill:var(--fg-dim)" x="630" y="110" text-anchor="middle" font-size="10">决策节点 · 因果边</text>
+      <text style="fill:var(--fg-dim)" x="630" y="130" text-anchor="middle" font-size="10">先例检索 · 策略门</text>
+
+      <line style="stroke:var(--muted)" x1="100" y1="160" x2="260" y2="198" stroke-width="2"/>
+      <line style="stroke:var(--muted)" x1="280" y1="160" x2="320" y2="198" stroke-width="2"/>
+      <line style="stroke:var(--muted)" x1="460" y1="160" x2="400" y2="198" stroke-width="2"/>
+      <line style="stroke:var(--muted)" x1="630" y1="160" x2="470" y2="198" stroke-width="2"/>
+      <text style="fill:var(--fg-dim)" x="360" y="278" text-anchor="middle" font-size="10">四者读写同一张图 → Enriched KG</text>
+    </svg>
+    <figcaption>智能层四件套。全部以 KG 字典为输入，各自的产出再并回图——这就是「Enriched KG」的构成。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-reasoning">7.2 reasoning：确定性推理三引擎</h2>
+
+  <p>
+    <code>semantica.reasoning</code> 提供三种可解释的推理器，对应第 2 章说的 OWL RL 路线
+    （公理都化成 if-then 规则，多项式可算）：
+  </p>
+
+  <p><strong>① 前向链（<code>Reasoner</code>，<code>reasoning/reasoner.py:57</code>）</strong>：
+  从已知事实出发，反复套用规则直到没有新事实——就是第 2 章 rdfsInference 演示的引擎版。</p>
+
+  <p><strong>② Rete 网络（<code>ReteEngine</code>，<code>reasoning/rete_engine.py:120</code>）</strong>：
+  前向链的工业化加速版。朴素前向链每来一个新事实要把所有规则重试一遍；
+  <strong>Rete 用「编译好的网络」记住规则的条件匹配状态</strong>（alpha 节点过滤单个条件、
+  beta 节点做跨条件连接），新事实只走受影响的路径——规则多、事实多时快几个数量级。
+  经典用法是规则引擎式合规检查：</p>
+
+  <pre><code>from semantica.reasoning import ReteEngine, Rule, Fact, RuleType
+
+rete = ReteEngine()
+rete.build_network([                       # rete_engine.py:155
+    Rule(rule_id="aml_flag",
+         conditions=[
+             {"field": "amount",  "operator": ">", "value": 10_000},
+             {"field": "country", "operator": "in", "value": ["IR", "KP", "SY"]},
+         ],
+         conclusion="flag_for_compliance_review",
+         rule_type=RuleType.IMPLICATION),
+])
+rete.add_fact(Fact("tx_001", "transaction", [{"amount": 15_000, "country": "IR"}]))
+flagged = rete.match_patterns()            # rete_engine.py:266
+# → [{"rule": "aml_flag", "matched_facts": ["tx_001"], "conclusion": "flag_for_compliance_review"}]</code></pre>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 文档 vs 代码：Rete 匹配器的已知局限（README 自己承认）</div>
+    <p style="margin:.3rem 0;">
+      README 在 reasoning 模块下挂了一条醒目的 Current limitation：
+      <em>「ReteEngine's alpha-node condition matcher is intentionally simple in this release —
+      validate match_patterns() output against your actual rule set before wiring it into a
+      production compliance gate」</em>。翻译：alpha 节点的条件求值目前刻意从简，
+      上生产合规门之前必须先用自己的规则集验证输出。这是继第 3 章 OntologyValidator 之后
+      第二处「README 明示的实现局限」——好消息是它明说了；坏消息是很多人不读注释。
+      本书的态度：<strong>知道边界的能力才是可用的能力</strong>。
+    </p>
+  </div>
+
+  <p><strong>③ Datalog（<code>DatalogReasoner</code>，<code>reasoning/datalog_reasoner.py:39</code>）</strong>：
+  递归规则查询，图上算传递闭包的天然语言：</p>
+
+  <pre><code>engine = DatalogReasoner()
+engine.add_fact("parent(tom, bob)")
+engine.add_fact("parent(bob, ann)")
+engine.add_rule("ancestor(X, Y) :- parent(X, Y).")
+engine.add_rule("ancestor(X, Z) :- parent(X, Y), ancestor(Y, Z).")   # ← 递归
+engine.query("ancestor(tom, ?X)")    # → [{"X": "bob"}, {"X": "ann"}]</code></pre>
+
+  <p>
+    第 4 章「能力问题」的推理版实现正在这里：CQ「A 的祖先有谁」⇒ 一条 Datalog 规则。
+    配套的 <code>ExplanationGenerator</code>（<code>reasoning/explanation_generator.py:95</code>）
+    把推理过程展开成带步骤的 <code>Explanation</code> 对象——不是只给答案，而是给
+    「答案是怎么一步步推出来的」。这正是「可问责 AI」的推理侧支柱：黑盒推理在监管场景一文不值。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-provenance">7.3 provenance：W3C PROV-O 溯源</h2>
+
+  <p>
+    第 1 章说「每个节点都能回答『我从哪来』」——具体机制是 W3C PROV-O 标准
+    （entity 被什么 activity 产生、agent 参与了什么）。<code>ProvenanceManager</code>
+    （<code>provenance/manager.py:64</code>）把它落到 SQLite 存储：
+  </p>
+
+  <pre><code>from semantica.provenance import ProvenanceManager
+
+prov = ProvenanceManager(storage_path="./audit.db")
+prov.track_entity("acme_corp", source="contracts/acme_master_2024.pdf",
+                  metadata={"page": 1, "confidence": 0.97,
+                            "extractor": "NamedEntityRecognizer"})   # manager.py:268
+prov.track_relationship("alice_works_for_acme", source="hr/employees_q1.csv",
+                  metadata={"source_entity_id": "alice_chen", "target_entity_id": "acme_corp"})  # :422
+
+lineage = prov.get_lineage("acme_corp")      # :753  直接来源
+trail   = prov.trace_lineage("alice_chen")   # :819  完整祖先链（可限深）</code></pre>
+
+  <p>
+    与第 6 章的连线：去重合并时 <code>preserve_provenance=True</code> 保的就是这些记录；
+    审计导出（PROV-O Turtle / CSV / JSON）的原料也是它。四件套里 provenance 最像「税务局」——
+    不生产知识，但每笔交易都留票据。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-decisions">7.4 decisions：决策智能</h2>
+
+  <p>
+    决策智能是 Semantica 的旗舰叙事：AI 的每次选择不是一行日志，而是<strong>图上一等公民节点</strong>，
+    带五步生命周期：
+  </p>
+
+  <pre><code>graph.record_decision(                       # context_graph.py:4078
+    category="credit_application",
+    scenario="Personal loan, $85k income, 31% DTI",
+    reasoning="Income meets threshold; no adverse credit events",
+    outcome="proceed_to_underwriting", confidence=0.88)   # → decision_id
+
+graph.add_causal_relationship(d1, d2, relationship_type="CAUSED")</code></pre>
+
+  <p>
+    因果边的类型是<strong>封闭枚举</strong>：<code>context_graph.py:494</code> 定义
+    <code>_CAUSAL_EDGE_TYPES = ("CAUSED", "INFLUENCED", "PRECEDENT_FOR")</code>，
+    且 502–506 行有别名归一表（CAUSES→CAUSED、INFLUENCES→INFLUENCED、PRECEDES→PRECEDENT_FOR）——
+    用户手滑写动词形态也能被规整。这个「枚举 + 宽容归一」的小模式在大型代码库里非常值得学。
+  </p>
+
+  <p>记录之后的三个<strong>正交</strong>查询方向：</p>
+
+  <ul>
+    <li><strong>向上</strong>：<code>trace_decision_chain(id)</code> 追完整因果祖先——「为什么会走到这一步」；</li>
+    <li><strong>向下</strong>：<code>analyze_decision_impact(id)</code> 看下游影响面——「这个决定影响了什么」；</li>
+    <li><strong>横向</strong>：<code>find_similar_decisions("...")</code> 语义先例检索——「以前类似情况怎么处理的」。</li>
+  </ul>
+
+  <p>
+    加上治理与导出（<code>check_decision_rules()</code> 策略门；PROV-O/CSV/JSON 审计导出），
+    完整生命周期就是：<strong>record → link → query → govern → audit</strong>
+    （<code>ARCHITECTURE.md</code> 的五格图）。决策模块横跨 context 包多个文件
+    （decision_recorder / decision_models / causal_analyzer / policy_engine / decision_query）——
+    但统一从 ContextGraph 的方法面暴露。
+  </p>
+
+  <div class="demo" data-demo="decisionGraph">
+    <div class="demo-title">动手试 — 决策图的三个正交查询</div>
+    <p>一条固定的贷款决策链（d1 初审 → d2 批准 → d3 定价；d1 影响 d4 反欺诈标记）。切换查询方式，看答案方向如何变化。</p>
+    <label class="opt"><input type="radio" name="dq" value="trace"> trace_decision_chain(d3)：向上追祖先</label>
+    <label class="opt"><input type="radio" name="dq" value="impact"> analyze_decision_impact(d1)：向下看影响</label>
+    <label class="opt"><input type="radio" name="dq" value="similar"> find_similar_decisions(...)：横向找先例</label>
+    <div class="demo-output empty">选择一个查询方向。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-ontology-role">7.5 ontology 在四件套中的位置：为另外三件提供「语法」</h2>
+
+  <p>
+    把四件套摆在一起，ontology 的角色就清晰了——它不直接回答业务问题，
+    它<strong>定义另外三件套所引用词汇的语义</strong>：
+  </p>
+
+  <ul>
+    <li>reasoning 的规则条件写 <code>amount &gt; 10000</code>，而「transaction 有 amount 字段、
+        amount 是 xsd:long」是本体的断言；</li>
+    <li>decisions 的 scenario/metadata 里类型化的字段，其合法取值由本体 + SHACL 把关；</li>
+    <li>provenance 记录 extractor 名字，而 extractor 与实体类型的对应关系是本体知识；</li>
+    <li>四件套产出的增强 KG 最终落进三元组库时，SPARQL 查询的每个谓语 IRI 都来自本体词汇
+        （第 12 章讲 <code>semantica.dev/ns#</code> 词表时闭环）。</li>
+  </ul>
+
+  <p>
+    一句话总结全书后半的论点：<strong>没有本体的知识图谱是「节点汤」，没有知识图谱的本体是「空中楼阁」</strong>——
+    Semantica 的流水线让两者从彼此中生长。第三部分我们就钻进这个生长机器：
+    <code>OntologyGenerator</code> 如何从 KG 字典推断出类、属性、层级与 SHACL。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">7.6 本章回顾</h2>
+  <ul>
+    <li><strong>四件套四维度</strong>：ontology 加模式、reasoning 加推断、provenance 加出处、decisions 加因果；
+        全部以 KG 字典为输入，产出并回图 → Enriched KG。</li>
+    <li><strong>reasoning 三引擎</strong>：前向链（基础）、Rete（编译匹配网络加速，rete_engine.py:120）、
+        Datalog（递归规则/传递闭包）。OWA RL 路线的工程落地。<strong>已知局限</strong>：alpha 匹配器刻意从简，
+        生产合规门前须自验。</li>
+    <li><strong>provenance</strong>：PROV-O 标准 + SQLite 落地；track_entity/track_relationship 记录，
+        get_lineage/trace_lineage 回溯；去重的 preserve_provenance 保的就是它。</li>
+    <li><strong>decisions</strong>：决策是一等节点；因果边枚举（CAUSED/INFLUENCED/PRECEDENT_FOR）+ 别名归一
+        （context_graph.py:494-506）；生命周期 record→link→query→govern→audit；
+        三正交查询：trace 向上 / impact 向下 / similar 横向。</li>
+    <li><strong>ontology = 四件套的语法层</strong>：另外三件引用的每个词汇的语义都由本体定义。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>把 ReteEngine 直接当生产合规门</strong>——README 明示 alpha 匹配器从简，先用自己的规则集验证。</li>
+      <li><strong>期望推理器替你发现「逻辑矛盾」</strong>——Semantica 的推理器是规则引擎路线（加事实），
+          逻辑冲突检测在 conflicts 模块（第 6 章）走的是另一条路。</li>
+      <li><strong>把决策记录当日志写</strong>——decision 是图节点：不 link 因果边、不挂 provenance，
+          trace/impact 就退化成空查询。记录时就要连线。</li>
+      <li><strong>绕过 record_decision 自己建决策节点</strong>——绕过统一入口会错过类型约束、
+          策略门与导出适配。</li>
+      <li><strong>以为 provenance 只是「记个文件名」</strong>——它是结构化的 PROV-O 链
+          （谁、什么活动、什么置信度、哪一页），审计导出的完整语义都建立在结构化程度上。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="7">
+    <h2>第 7 章测试</h2>
+
+    <div class="q" data-id="7-1" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 语义先例检索：横向找历史上相似场景的决策。"
+         data-rationale="A 是 trace_decision_chain（向上）；B 是 analyze_decision_impact（向下）；D 没有对应的单一 API（风险分析跨多个能力）。三个查询方向正交：trace 答为什么、impact 答影响了什么、similar 答以前怎么办。"
+         data-review="sec-decisions">
+      <div class="prompt"><span class="qnum">Q1.</span> 「以前遇到类似 31% DTI 的个人贷申请，当时怎么处理的？」——哪个 API 回答这个问题？</div>
+      <label class="opt"><input type="radio" name="q-7-1" value="a"> A. <code>trace_decision_chain(id)</code></label>
+      <label class="opt"><input type="radio" name="q-7-1" value="b"> B. <code>analyze_decision_impact(id)</code></label>
+      <label class="opt"><input type="radio" name="q-7-1" value="c"> C. <code>find_similar_decisions("...")</code></label>
+      <label class="opt"><input type="radio" name="q-7-1" value="d"> D. <code>check_decision_rules(...)</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-2" data-type="mcq" data-multiselect="true" data-correct='["a","c","e"]'
+         data-answer="A（transitive 语义的传递闭包，如 ancestor）、C（合规规则引擎场景）、E（大量规则反复触发的流式匹配）适合 Rete。B 的图算法在 kg 模块；D 的 SHACL 校验在 ontology/pyshacl。"
+         data-rationale="Rete 的本质是把规则条件编译成带记忆的网络，让「新事实到来时只重算受影响的匹配」——规则越多、事实流越连续，收益越大。图算法走 semantica.kg（CentralityCalculator 等）；SHACL 走 pyshacl；SPARQL 查询走 triplet_store。"
+         data-review="sec-reasoning">
+      <div class="prompt"><span class="qnum">Q2.</span> 以下哪些场景是 ReteEngine 的用武之地？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-7-2" value="a"> A. 计算传递闭包（ancestor 链）</label>
+      <label class="opt"><input type="checkbox" name="q-7-2" value="b"> B. 图中心性计算</label>
+      <label class="opt"><input type="checkbox" name="q-7-2" value="c"> C. AML/反洗钱规则引擎：新交易流入即时标记</label>
+      <label class="opt"><input type="checkbox" name="q-7-2" value="d"> D. SHACL 形状校验</label>
+      <label class="opt"><input type="checkbox" name="q-7-2" value="e"> E. 数百条规则持续匹配高频事实流</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-3" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 记住规则的中间匹配状态，新事实只走受影响的路径，避免全量重试。"
+         data-rationale="这是 Rete 算法四十年屹立不倒的原因：以空间（网络节点存状态）换时间（增量匹配）。A 是朴素前向链；C 的并行是另一种优化方向；D 说反了——它恰恰为频繁触发而生。"
+         data-review="sec-reasoning">
+      <div class="prompt"><span class="qnum">Q3.</span> 相比朴素前向链，Rete 网络快在哪？</div>
+      <label class="opt"><input type="radio" name="q-7-3" value="a"> A. 每个新事实都要重试所有规则，但用了更快的语言</label>
+      <label class="opt"><input type="radio" name="q-7-3" value="b"> B. 编译后的网络记住条件匹配状态，新事实只触发受影响路径</label>
+      <label class="opt"><input type="radio" name="q-7-3" value="c"> C. 它把规则并行分发到多核</label>
+      <label class="opt"><input type="radio" name="q-7-3" value="d"> D. 它只适用于规则极少的小场景</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-4" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— README 明示：alpha 节点条件求值刻意从简，上生产合规门前必须用真实规则集验证 match_patterns() 输出。"
+         data-rationale="这是 README 亲自标注的 Current limitation（继 OntologyValidator 之后的第二处明示局限）。A 无此承诺；B 说反（SPARQL 在 triplet_store）；C 与事实相反。教训：能用 ≠ 可托付，读 limitation 注释是工程素养。"
+         data-review="sec-reasoning">
+      <div class="prompt"><span class="qnum">Q4.</span> 关于 ReteEngine 的已知局限，正确的说法是？</div>
+      <label class="opt"><input type="radio" name="q-7-4" value="a"> A. 它已通过全部金融合规认证</label>
+      <label class="opt"><input type="radio" name="q-7-4" value="b"> B. 它不支持 in 操作符，无法做国家名单检查</label>
+      <label class="opt"><input type="radio" name="q-7-4" value="c"> C. 它在 0.6 版本已被移除</label>
+      <label class="opt"><input type="radio" name="q-7-4" value="d"> D. alpha 条件匹配器刻意从简，生产使用前须用自己的规则集验证输出</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-5" data-type="fill" data-accepted='["caused, influenced, precedent_for","caused、influenced、precedent_for","caused influenced precedent_for","caused, influenced, precedent for"]'
+         data-answer="CAUSED、INFLUENCED、PRECEDENT_FOR（context_graph.py:494 的 _CAUSAL_EDGE_TYPES）。"
+         data-rationale="封闭枚举 + 别名归一（CAUSES→CAUSED 等，502-506 行）：宽容输入、严格存储。写因果边只能用这三个。"
+         data-review="sec-decisions">
+      <div class="prompt"><span class="qnum">Q5.</span> 填空：add_causal_relationship 的 relationship_type 只接受三个枚举值（忽略大小写）：______。</div>
+      <input type="text" class="fill" placeholder="三个值，逗号分隔">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-6" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— get_lineage / trace_lineage：结构化溯源链（源文件、页码、置信度、extractor）。"
+         data-rationale="ProvenanceManager（manager.py:64）的 get_lineage（:753）给直接来源、trace_lineage（:819）给完整祖先链。A 是 conflicts 的职责；B 是 vector_store 的检索；D 是 export 的事。provenance 是审计导出（PROV-O/CSV/JSON）的原料。"
+         data-review="sec-provenance">
+      <div class="prompt"><span class="qnum">Q6.</span> 审计员问「acme_corp 这个实体是从哪个文件的哪一页提取的、置信度多少？」——哪个模块回答？</div>
+      <label class="opt"><input type="radio" name="q-7-6" value="a"> A. semantica.conflicts</label>
+      <label class="opt"><input type="radio" name="q-7-6" value="b"> B. semantica.vector_store</label>
+      <label class="opt"><input type="radio" name="q-7-6" value="c"> C. semantica.provenance（get_lineage / trace_lineage）</label>
+      <label class="opt"><input type="radio" name="q-7-6" value="d"> D. semantica.export</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-7" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 加「模式」维度：为另外三件套引用的词汇（类、属性、类型、约束）提供语义。"
+         data-rationale="本章的核心论点：reasoning 的规则字段、decisions 的类型化元数据、provenance 的 extractor-类型对应、SPARQL 的谓语 IRI——语义全部锚在本体上。没有本体的 KG 是节点汤，没有 KG 的本体是空中楼阁。"
+         data-review="sec-ontology-role">
+      <div class="prompt"><span class="qnum">Q7.</span> 在四件套协作中，ontology 模块的角色最准确的描述是？</div>
+      <label class="opt"><input type="radio" name="q-7-7" value="a"> A. 负责存储增强后的 KG</label>
+      <label class="opt"><input type="radio" name="q-7-7" value="b"> B. 为其余三件引用的词汇提供语义（类型、属性、约束）——四件套的语法层</label>
+      <label class="opt"><input type="radio" name="q-7-7" value="c"> C. 记录每个事实的来源</label>
+      <label class="opt"><input type="radio" name="q-7-7" value="d"> D. 执行前向链推理</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-8" data-type="fill" data-accepted='["explanationgenerator","explanation generator","explanationgenerator()","explanation generator class"]'
+         data-answer="ExplanationGenerator（reasoning/explanation_generator.py:95）。"
+         data-rationale="它把推理结果展开成带步骤的 Explanation 对象（conclusion + ReasoningStep 列表 + Justification）——不只是答案，而是「怎么推出来的」。可问责推理的支柱。"
+         data-review="sec-reasoning">
+      <div class="prompt"><span class="qnum">Q8.</span> 填空：把推理过程展开为带步骤的 Explanation 对象（可问责推理）的类是 ______。</div>
+      <input type="text" class="fill" placeholder="类名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-9" data-type="mcq" data-correct='["a"]'
+         data-answer="A — record → link → query → govern → audit（记录、连因果、查询、策略门、审计导出）——ARCHITECTURE.md 的五格生命周期。"
+         data-rationale="B/C/D 的顺序或成分不对（导出在最后；govern 在 query 之后）。五步环环相扣：不 link 则 query 落空，不 govern 则 audit 无力。"
+         data-review="sec-decisions">
+      <div class="prompt"><span class="qnum">Q9.</span> 决策智能的完整生命周期顺序是？</div>
+      <label class="opt"><input type="radio" name="q-7-9" value="a"> A. record → link → query → govern → audit</label>
+      <label class="opt"><input type="radio" name="q-7-9" value="b"> B. query → record → link → audit → govern</label>
+      <label class="opt"><input type="radio" name="q-7-9" value="c"> C. link → record → audit → query → govern</label>
+      <label class="opt"><input type="radio" name="q-7-9" value="d"> D. record → govern → link → audit → query</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="7-10" data-type="short"
+         data-key-points='["四件套四维度：模式/推断/出处/因果，共享 KG 字典输入，产出并回图","Rete 编译匹配网络增量求值（快）；已知局限 alpha 匹配器从简，生产前自验","provenance：PROV-O + track/get_lineage/trace_lineage，审计导出的原料","decisions：一等节点 + 因果边枚举（CAUSED/INFLUENCED/PRECEDENT_FOR）+ 三正交查询 + 五步生命周期","ontology 是四件套的语法层：其余三件引用词汇的语义锚点"]'
+         data-answer="智能层四件套在 KG 之上各加一维：ontology 加模式（类/属性/约束——其余三件的语法层），reasoning 加推断（前向链、Rete 网络——编译匹配状态增量求值、Datalog 递归规则；Rete 的 alpha 匹配器目前刻意从简，生产合规门前须自验），provenance 加出处（PROV-O 结构化溯源：track_entity/track_relationship 记录、get_lineage/trace_lineage 回溯），decisions 加因果（决策是一等节点，因果边仅 CAUSED/INFLUENCED/PRECEDENT_FOR 三枚举并带别名归一；生命周期 record→link→query→govern→audit；trace 向上、impact 向下、similar 横向三个正交查询）。四者共享 KG 字典，产出并回图构成 Enriched KG。"
+         data-rationale="五个要点：四维度、Rete 机制与局限、provenance API、决策体系、ontology 的语法层角色。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：四件套各加什么维度？Rete 为什么快、有什么已知局限？决策智能的边类型枚举与三个正交查询是什么？ontology 为什么是语法层？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    第二部分完结。第三部分开始真正的深潜：<a href="08-generator-pipeline.html"><strong>
+    OntologyGenerator 六阶段流水线</strong></a>——56K 行主文件逐段精读。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

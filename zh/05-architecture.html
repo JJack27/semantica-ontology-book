@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 章 — Semantica 架构全景与核心抽象</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 5 章 · 第二部分：repo 全景</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="5">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 5 · 第二部分：Semantica repo 全景</div>
+    <h1>Semantica 架构全景与核心抽象</h1>
+    <p class="lede">
+      从这章起，你从「本体领域学习者」切换到「semantica repo 的工程师」。
+      目标是建立那张脑内地图：27 个子包各管什么、数据长什么形状、
+      两个脊柱抽象（KG 字典和 <code>ContextGraph</code>）在哪里交接、
+      以及 ontology 模块在整个版图上的位置。有了这张地图，后面八章的精读才不会迷路。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能复述 Semantica 的一句话定位与完整流水线（九个阶段），并说出每个阶段对应的子包</li>
+      <li>能按「摄取 → 清洗 → 抽取 → 质量 → 建图 → 智能 → 存储 → 输出」给 27 个子包归位</li>
+      <li>能解释 KG 字典（<code>{"entities": [...], "relationships": [...]}</code>）的形状以及它为什么是全 repo 的通用货币</li>
+      <li>能用 <code>ContextGraph</code> 的 <code>add_node / add_edge / to_kg_dict / state_at</code> 做基本操作，并指出各自源码位置</li>
+      <li>能说出四种使用入口（Python API / CLI / REST / MCP）各自的适用场景</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-big-picture">5.1 一句话心智模型</h2>
+
+  <p>
+    README 的自我介绍浓缩成一句：<strong>Semantica 是 LLM/向量库/智能体框架之下的
+    确定性基础设施层</strong>——把碎片化数据做成带类型、带约束、带溯源的知识图谱，
+    让每个 AI 决策可审计。关键定语是「确定性」：建图、推理、溯源都不需要 LLM 参与
+    （LLM 只是可选的抽取增强），这是它敢主打「监管级可问责」的底气。
+  </p>
+
+  <p>
+    整个系统是一条真实存在的流水线（<code>ARCHITECTURE.md</code> 有完整 Mermaid 图），
+    每个阶段都是独立可导入的模块：
+  </p>
+
+  <pre><code>Sources → Ingest → Parse → Normalize → Split → Extract → Conflict Detection → Dedup
+   → Knowledge Graph → [ Ontology · Reasoning · Provenance · Decisions ] → Enriched KG
+   → Vector Store + Graph Store (RDF & LPG) → Export / Visualize / REST · MCP · CLI</code></pre>
+
+  <p>
+    用第一部分的语言重读这条流水线：<strong>前半段（到 Knowledge Graph）是造「数据层」</strong>——
+    把 PDF、数据库、网页变成实例三元组；<strong>方括号里四件套是造/用「模式层」</strong>——
+    ontology 从数据反推模式，reasoning 用规则扩知，provenance 给每个事实挂来源，
+    decisions 把 AI 的选择变成一等公民节点；<strong>后半段是落地</strong>——多后端存储与全格式导出。
+    你学的前四章，恰好是方括号那格的理论底座。
+  </p>
+
+  <div class="demo" data-demo="pipelineTour">
+    <div class="demo-title">动手试 — 流水线导览</div>
+    <p>点选每个阶段，看它由哪些子包负责、关键类是谁。建议按顺序从上往下点一遍。</p>
+    <label class="opt"><input type="radio" name="pstage" value="ingest"> ① Ingest 摄取</label>
+    <label class="opt"><input type="radio" name="pstage" value="parse"> ② Parse + Normalize 解析与规范化</label>
+    <label class="opt"><input type="radio" name="pstage" value="split"> ③ Split 分块</label>
+    <label class="opt"><input type="radio" name="pstage" value="extract"> ④ Extract 抽取</label>
+    <label class="opt"><input type="radio" name="pstage" value="quality"> ⑤ Conflicts + Dedup 质量关卡</label>
+    <label class="opt"><input type="radio" name="pstage" value="kg"> ⑥ KG 建图</label>
+    <label class="opt"><input type="radio" name="pstage" value="intel"> ⑦ 智能层四件套</label>
+    <label class="opt"><input type="radio" name="pstage" value="storage"> ⑧ 存储（向量/LPG/RDF）</label>
+    <label class="opt"><input type="radio" name="pstage" value="output"> ⑨ 输出与服务</label>
+    <div class="demo-output empty">选择一个阶段。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-module-map">5.2 27 个子包的地图</h2>
+
+  <p>
+    打开 <code>semantica/</code> 目录，除了 <code>cli.py / server.py / worker.py</code> 三个顶层入口文件，
+    有 27 个子包。按流水线角色分组后，记忆负担立刻减半：
+  </p>
+
+  <table>
+    <thead><tr><th>角色</th><th>子包</th><th>一句话职责</th></tr></thead>
+    <tbody>
+      <tr><td><strong>摄取</strong></td><td><code>ingest</code></td><td>文件/网页/数据库/流/Databricks/Snowflake/Git/邮件/MCP → 统一文档列表</td></tr>
+      <tr><td><strong>清洗</strong></td><td><code>parse</code> · <code>normalize</code> · <code>split</code></td><td>解析格式、规范化文本/日期/数字、GraphRAG 友好分块</td></tr>
+      <tr><td><strong>抽取</strong></td><td><code>semantic_extract</code></td><td>NER、关系抽取、事件检测、三元组、共指消解</td></tr>
+      <tr><td><strong>质量</strong></td><td><code>conflicts</code> · <code>deduplication</code></td><td>矛盾检测与仲裁；实体解析与合并</td></tr>
+      <tr><td><strong>建图</strong></td><td><code>kg</code></td><td>GraphBuilder、中心性/社区/路径/链接预测、双时间态事实</td></tr>
+      <tr><td><strong>智能层</strong></td><td><code>ontology</code> · <code>reasoning</code> · <code>provenance</code> · <code>context</code></td><td>本体生成/治理、Rete/Datalog/SPARQL、PROV-O 溯源、ContextGraph 与决策智能</td></tr>
+      <tr><td><strong>存储</strong></td><td><code>vector_store</code> · <code>graph_store</code> · <code>triplet_store</code></td><td>FAISS/Qdrant 等 8 种向量后端；Neo4j 等 4 种 LPG；Oxigraph 等 4 种 RDF——全部可换</td></tr>
+      <tr><td><strong>输出</strong></td><td><code>export</code> · <code>visualization</code></td><td>RDF/OWL/Parquet/Cypher/JSON-LD 导出；交互式可视化工作台</td></tr>
+      <tr><td><strong>平台</strong></td><td><code>explorer</code> · <code>mcp_server</code> · <code>server.py</code> · <code>cli.py</code></td><td>Knowledge Explorer Web 应用、MCP 服务器、REST API、CLI</td></tr>
+      <tr><td><strong>支撑</strong></td><td><code>core</code> · <code>utils</code> · <code>llms</code> · <code>embeddings</code> · <code>pipeline</code> · <code>seed</code> · <code>evals</code> · <code>change_management</code></td><td>基础类型、工具函数、LLM 网关（LiteLLM）、嵌入、流水线 DSL、种子数据、评测、本体版本管理</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    有个结构事实值得单独记：<strong>本体版本管理（<code>change_management</code>）是独立子包</strong>，
+    而不是 ontology 的子模块——第 4 章提过的那次「搬家」。跨包引用时从
+    <code>semantica.change_management</code> 导入 <code>VersionManager</code>。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantica 子包版图">
+      <text style="fill:var(--fg)" x="360" y="22" text-anchor="middle" font-size="13" font-weight="700">数据从左到右流过五个功能区，ontology 在智能层</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="15" y="40" width="120" height="250" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="75" y="66" text-anchor="middle" font-size="12" font-weight="700">摄取+清洗</text>
+      <text style="fill:var(--fg-dim)" x="75" y="96" text-anchor="middle" font-size="10">ingest</text>
+      <text style="fill:var(--fg-dim)" x="75" y="116" text-anchor="middle" font-size="10">parse</text>
+      <text style="fill:var(--fg-dim)" x="75" y="136" text-anchor="middle" font-size="10">normalize</text>
+      <text style="fill:var(--fg-dim)" x="75" y="156" text-anchor="middle" font-size="10">split</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="155" y="40" width="120" height="250" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="215" y="66" text-anchor="middle" font-size="12" font-weight="700">抽取+质量</text>
+      <text style="fill:var(--fg-dim)" x="215" y="96" text-anchor="middle" font-size="10">semantic_extract</text>
+      <text style="fill:var(--fg-dim)" x="215" y="116" text-anchor="middle" font-size="10">conflicts</text>
+      <text style="fill:var(--fg-dim)" x="215" y="136" text-anchor="middle" font-size="10">deduplication</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="295" y="40" width="120" height="250" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="355" y="66" text-anchor="middle" font-size="12" font-weight="700">建图</text>
+      <text style="fill:var(--fg-dim)" x="355" y="96" text-anchor="middle" font-size="10">kg</text>
+      <text style="fill:var(--fg-dim)" x="355" y="116" text-anchor="middle" font-size="10">(GraphBuilder</text>
+      <text style="fill:var(--fg-dim)" x="355" y="136" text-anchor="middle" font-size="10"> 双时间态/分析)</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="435" y="40" width="140" height="250" rx="10" stroke-width="2.5"/>
+      <text style="fill:var(--accent)" x="505" y="66" text-anchor="middle" font-size="12" font-weight="700">智能层 ★</text>
+      <text style="fill:var(--accent)" x="505" y="96" text-anchor="middle" font-size="10">ontology ← 本书主角</text>
+      <text style="fill:var(--fg-dim)" x="505" y="116" text-anchor="middle" font-size="10">reasoning</text>
+      <text style="fill:var(--fg-dim)" x="505" y="136" text-anchor="middle" font-size="10">provenance</text>
+      <text style="fill:var(--fg-dim)" x="505" y="156" text-anchor="middle" font-size="10">context</text>
+      <text style="fill:var(--fg-dim)" x="505" y="186" text-anchor="middle" font-size="10">change_management</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="595" y="40" width="110" height="250" rx="10" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="650" y="66" text-anchor="middle" font-size="12" font-weight="700">存储+输出</text>
+      <text style="fill:var(--fg-dim)" x="650" y="96" text-anchor="middle" font-size="10">vector_store</text>
+      <text style="fill:var(--fg-dim)" x="650" y="116" text-anchor="middle" font-size="10">graph_store</text>
+      <text style="fill:var(--fg-dim)" x="650" y="136" text-anchor="middle" font-size="10">triplet_store</text>
+      <text style="fill:var(--fg-dim)" x="650" y="156" text-anchor="middle" font-size="10">export</text>
+      <text style="fill:var(--fg-dim)" x="650" y="176" text-anchor="middle" font-size="10">visualization</text>
+
+      <line style="stroke:var(--muted)" x1="135" y1="165" x2="153" y2="165" stroke-width="2"/><polygon style="fill:var(--muted)" points="153,165 145,161 145,169"/>
+      <line style="stroke:var(--muted)" x1="275" y1="165" x2="293" y2="165" stroke-width="2"/><polygon style="fill:var(--muted)" points="293,165 285,161 285,169"/>
+      <line style="stroke:var(--muted)" x1="415" y1="165" x2="433" y2="165" stroke-width="2"/><polygon style="fill:var(--muted)" points="433,165 425,161 425,169"/>
+      <line style="stroke:var(--muted)" x1="575" y1="165" x2="593" y2="165" stroke-width="2"/><polygon style="fill:var(--muted)" points="593,165 585,161 585,169"/>
+
+      <text style="fill:var(--accent)" x="505" y="255" text-anchor="middle" font-size="10">平台入口（横跨全部）：</text>
+      <text style="fill:var(--fg-dim)" x="505" y="272" text-anchor="middle" font-size="10">cli.py · server.py(REST) · mcp_server · explorer</text>
+      <text style="fill:var(--fg-dim)" x="360" y="315" text-anchor="middle" font-size="10">支撑层（垫底）：core · utils · llms · embeddings · pipeline · seed · evals</text>
+    </svg>
+    <figcaption>Semantica 版图。本体读者的重点是右二格：ontology 与 reasoning/provenance/context 并列，
+    共同消费 KG 字典、产出增强 KG；平台入口横向穿透所有层。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-core-abstractions">5.3 两个脊柱抽象：KG 字典与 ContextGraph</h2>
+
+  <p>
+    这个 repo 里所有模块交换数据，靠的是一个朴素到令人发指的形状——
+    <strong>KG 字典</strong>：
+  </p>
+
+  <pre><code>kg = {
+    "entities": [
+        {"id": "acme_corp",  "type": "Organization", "name": "Acme Corp", "industry": "SaaS"},
+        {"id": "alice_chen", "type": "Person",       "role": "CTO"},
+    ],
+    "relationships": [
+        {"source": "alice_chen", "target": "acme_corp", "type": "works_for"},
+    ],
+}</code></pre>
+
+  <p>
+    用第一部分的话说：entities 的 <code>type</code> 是<strong>模式层概念的实例化</strong>，
+    relationships 是<strong>实例层的边</strong>。ingest 产出它的原料、kg 模块组装它、
+    ontology 模块从它<strong>反推模式层</strong>、export 模块把它序列化成 Turtle/JSON-LD、
+    存储层把它写进图数据库——它是全 repo 的通用货币。注意键名的演变史坑：
+    早期版本 relationship 里用 <code>source</code>/<code>target</code>，导出适配用
+    <code>source_id</code>/<code>target_id</code>，README 特意提醒 <code>to_kg_dict()</code>
+    是官方适配器——别手拼字段。
+  </p>
+
+  <p>
+    另一个脊柱是 <code>ContextGraph</code>（<code>semantica/context/context_graph.py:514</code>，
+    整个文件 4000+ 行，是 repo 里最大的单类）。它是「带记忆、带决策、带时间旅行」的运行时图：
+  </p>
+
+  <pre><code>from semantica.context import ContextGraph
+
+graph = ContextGraph(advanced_analytics=True)
+
+# 节点/边 —— context_graph.py:1077 / :1110
+graph.add_node("acme_corp", "Organization", name="Acme Corp", industry="SaaS")
+graph.add_edge("alice_chen", "acme_corp", edge_type="works_for",
+               valid_from="2024-03-01", valid_until="2025-01-01")   # 带时间窗的边
+
+snap = graph.state_at("2024-06-01")     # :3485  时间旅行：任意历史时点的图快照
+kg   = graph.to_kg_dict()               # :3347  官方适配器 → 上面那个 KG 字典形状</code></pre>
+
+  <p>
+    <strong>两个抽象的分工</strong>：KG 字典是<strong>纯数据</strong>（dict/list，可序列化、可在模块间传递、
+    可喂给 OntologyGenerator）；<code>ContextGraph</code> 是<strong>运行时对象</strong>（带索引、带分析方法、
+    带决策记录、带 provenance 钩子）。<code>to_kg_dict()</code> 是两者的官方桥——
+    ContextGraph 世界流向流水线世界的那扇门。第三部分你会反复经过这扇门。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-entries">5.4 四种使用入口</h2>
+
+  <table>
+    <thead><tr><th>入口</th><th>位置</th><th>适合谁</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Python API</strong></td><td>包本身（<code>import semantica.…</code>）</td><td>把 Semantica 嵌进自己系统的开发者；本书全部代码走这条路</td></tr>
+      <tr><td><strong>CLI</strong></td><td><code>semantica/cli.py</code>（装包即得，50+ 命令）</td><td>脚本化/CI 任务：<code>semantica ingest / kg / ontology / export / doctor …</code></td></tr>
+      <tr><td><strong>REST API</strong></td><td><code>semantica/server.py</code>（100+ 端点）</td><td>跨语言调用方、平台集成</td></tr>
+      <tr><td><strong>MCP 服务器</strong></td><td><code>semantica/mcp_server/</code>（10+ 工具）</td><td>任何 MCP 兼容客户端（Claude Code、Cursor 等）把 Semantica 当工具用</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    还有一个值得单列的「第五入口」：<strong>Knowledge Explorer</strong>（<code>explorer/</code> 子包，
+    一个 FastAPI Web 应用）——README 演示视频里的图浏览器、Ontology Hub、SHACL Studio 都在
+    <code>explorer/routes/</code> 下，第 12 章去 ontology 路由里看看它到底暴露了什么。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">5.5 本章回顾</h2>
+  <ul>
+    <li><strong>定位</strong>：LLM 之下的确定性基础设施层；建图/推理/溯源不依赖 LLM——监管级可问责的来源。</li>
+    <li><strong>九阶段流水线</strong>：Ingest → Parse → Normalize → Split → Extract → Conflicts → Dedup → KG →
+        智能层 → 存储 → 输出；每阶段独立可导入。</li>
+    <li><strong>27 子包五分组</strong>：摄取/清洗、抽取/质量、建图、<strong>智能层（ontology 所在地）</strong>、存储/输出；
+        平台入口（cli/server/mcp/explorer）横跨全部；支撑层垫底。change_management 是独立子包。</li>
+    <li><strong>KG 字典</strong> <code>{"entities", "relationships"}</code> 是全 repo 通用货币；
+        <strong>ContextGraph</strong> 是运行时图对象；<code>to_kg_dict()</code>（context_graph.py:3347）是官方桥。</li>
+    <li><strong>四入口</strong>：Python API（本书主线）、CLI、REST、MCP；Explorer 是可视化工作台。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>手拼 KG 字典字段名</strong>——source/target 与 source_id/target_id 有历史演变；
+          要跨模块传递一律 <code>to_kg_dict()</code> 出来的形状。</li>
+      <li><strong>把 Semantica 当 LLM 包装器</strong>——它是确定性层，LLM 只是可选增强（llms 子包经 LiteLLM 接各家）。</li>
+      <li><strong>在 ontology 里找 VersionManager</strong>——它搬去了 change_management。</li>
+      <li><strong>以为必须跑整个流水线</strong>——每个子包独立可导入，只建本体不建图、只查图不建本体都合法。</li>
+      <li><strong>把 ContextGraph 和 KG 字典混为一谈</strong>——前者是带索引/分析/决策的运行时对象，
+          后者是可序列化纯数据；混淆会导致在错误层面传引用。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="5">
+    <h2>第 5 章测试</h2>
+
+    <div class="q" data-id="5-1" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— LLM/向量库/智能体框架之下的确定性基础设施层：建图、推理、溯源都不需要 LLM。"
+         data-rationale="A 把它当提示词工具（错，核心是图与推理）；B 把它当图数据库（错，它是能落到多种图库的上层平台）；D 把它当 RAG 框架（错，RAG 只是它能支撑的场景之一）。「确定性」是产品立身之本：监管场景要的是可复现、可解释，不是概率输出。"
+         data-review="sec-big-picture">
+      <div class="prompt"><span class="qnum">Q1.</span> Semantica 在技术栈中的定位，最准确的是？</div>
+      <label class="opt"><input type="radio" name="q-5-1" value="a"> A. 一个 LLM 提示词编排框架</label>
+      <label class="opt"><input type="radio" name="q-5-1" value="b"> B. 一个图数据库产品</label>
+      <label class="opt"><input type="radio" name="q-5-1" value="c"> C. LLM/向量库/智能体框架之下的确定性基础设施层</label>
+      <label class="opt"><input type="radio" name="q-5-1" value="d"> D. 一个 RAG 框架，核心是向量检索</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-2" data-type="mcq" data-multiselect="true" data-correct='["b","c","e"]'
+         data-answer="B、C、E 属于智能层四件套；A 属于质量关卡（抽取之后、建图之前）；D 属于存储层。"
+         data-rationale="智能层 = ontology（模式层生成与治理）+ reasoning（规则推理）+ provenance（溯源）+ context（ContextGraph 与决策智能）。conflicts/deduplication 在建图之前把关数据质量；vector_store 是落地存储。这个分组决定了第三部分的阅读顺序。"
+         data-review="sec-module-map">
+      <div class="prompt"><span class="qnum">Q2.</span> 以下哪些子包属于「智能层」？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-5-2" value="a"> A. semantica.conflicts</label>
+      <label class="opt"><input type="checkbox" name="q-5-2" value="b"> B. semantica.ontology</label>
+      <label class="opt"><input type="checkbox" name="q-5-2" value="c"> C. semantica.reasoning</label>
+      <label class="opt"><input type="checkbox" name="q-5-2" value="d"> D. semantica.vector_store</label>
+      <label class="opt"><input type="checkbox" name="q-5-2" value="e"> E. semantica.provenance</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-3" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 前半段造数据层（实例三元组），智能层造/用模式层（本体）并增强数据，后半段落地。"
+         data-rationale="用本体视角重读流水线：KG 之前是把原始数据变成实例（数据层）；ontology 从数据反推模式层，reasoning 用模式层扩知；存储导出让两层一起落地。这个对应关系是理解第三部分「为什么 OntologyGenerator 的输入是 entities/relationships」的钥匙。"
+         data-review="sec-big-picture">
+      <div class="prompt"><span class="qnum">Q3.</span> 用「模式层/数据层」的视角看流水线：智能层四件套（方括号里的部分）对应什么？</div>
+      <label class="opt"><input type="radio" name="q-5-3" value="a"> A. 纯粹的数据层加工，与模式层无关</label>
+      <label class="opt"><input type="radio" name="q-5-3" value="b"> B. 从数据层反推并治理模式层，再用模式层增强数据层</label>
+      <label class="opt"><input type="radio" name="q-5-3" value="c"> C. 只是缓存层，加速查询</label>
+      <label class="opt"><input type="radio" name="q-5-3" value="d"> D. 负责把 RDF 转成 LPG 的适配层</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-4" data-type="fill" data-accepted='["entities","entity","\"entities\""]'
+         data-answer="entities（另一个是 relationships）。"
+         data-rationale="KG 字典 = {"entities": [{id, type, ...属性}], "relationships": [{source, target, type, ...}]}。它是全 repo 的通用货币：kg 组装、ontology 反推模式层、export 序列化、存储落地都以它为形。"
+         data-review="sec-core-abstractions">
+      <div class="prompt"><span class="qnum">Q4.</span> 填空：全 repo 通用的 KG 字典有两个顶层键：<code>______</code> 和 <code>relationships</code>。</div>
+      <input type="text" class="fill" placeholder="键名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-5" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— to_kg_dict()：ContextGraph（运行时对象）→ KG 字典（可序列化纯数据）的官方适配器。"
+         data-rationale="手拼字段会踩 source/source_id 的历史演变坑（A/B）；from_kg_dict 不是官方桥（D 方向也不对——题意是从 ContextGraph 流向流水线）。README 和文档反复强调 to_kg_dict() 输出的形状是 RDFExporter/TemporalGraphQuery 等下游直接消费的标准形状。"
+         data-review="sec-core-abstractions">
+      <div class="prompt"><span class="qnum">Q5.</span> 你在 ContextGraph 上建好了图，现在要把它喂给 OntologyGenerator / RDFExporter。正确的桥接方式是？</div>
+      <label class="opt"><input type="radio" name="q-5-5" value="a"> A. 手动遍历内部节点，自己拼一个字典</label>
+      <label class="opt"><input type="radio" name="q-5-5" value="b"> B. 直接把 ContextGraph 对象传给生成器</label>
+      <label class="opt"><input type="radio" name="q-5-5" value="c"> C. 调 graph.to_kg_dict()，把返回的字典传过去</label>
+      <label class="opt"><input type="radio" name="q-5-5" value="d"> D. 先序列化成 JSON 字符串再解析</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-6" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— state_at(timestamp)：任意历史时点的图快照（时间旅行）。"
+         data-rationale="state_at 在 context_graph.py:3485，配合带 valid_from/valid_until 的边实现 point-in-time 快照。get_neighbors 是 BFS 遍历；record_decision 是决策记录；to_kg_dict 是序列化桥。双时间态细节第 6 章展开。"
+         data-review="sec-core-abstractions">
+      <div class="prompt"><span class="qnum">Q6.</span> 「2024-06-01 那天这张图长什么样」——ContextGraph 的哪个方法回答这个问题？</div>
+      <label class="opt"><input type="radio" name="q-5-6" value="a"> A. <code>graph.state_at("2024-06-01")</code></label>
+      <label class="opt"><input type="radio" name="q-5-6" value="b"> B. <code>graph.get_neighbors(...)</code></label>
+      <label class="opt"><input type="radio" name="q-5-6" value="c"> C. <code>graph.record_decision(...)</code></label>
+      <label class="opt"><input type="radio" name="q-5-6" value="d"> D. <code>graph.to_kg_dict()</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-7" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— CLI：装包即得、50+ 命令、天然适合脚本与 CI，无需写 Python 或起服务。"
+         data-rationale="Python API 适合嵌入系统开发；REST/MCP 适合跨语言/跨进程调用；CI 里最顺手的是 CLI（semantica ingest/kg/export 等命令组）。doctor 还能做环境体检。"
+         data-review="sec-entries">
+      <div class="prompt"><span class="qnum">Q7.</span> 你想在 CI 流水线里定期构建 KG 并导出 Turtle，不写 Python 代码。选哪个入口？</div>
+      <label class="opt"><input type="radio" name="q-5-7" value="a"> A. Python API</label>
+      <label class="opt"><input type="radio" name="q-5-7" value="b"> B. REST API</label>
+      <label class="opt"><input type="radio" name="q-5-7" value="c"> C. MCP 服务器</label>
+      <label class="opt"><input type="radio" name="q-5-7" value="d"> D. CLI</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-8" data-type="fill" data-accepted='["change_management","semantica.change_management","change management"]'
+         data-answer="semantica.change_management。"
+         data-rationale="VersionManager/OntologyVersion 从 ontology 包迁到了独立的 change_management 子包；ontology/__init__.py:170-171 有搬家注释。跨包引用要走新地址。"
+         data-review="sec-module-map">
+      <div class="prompt"><span class="qnum">Q8.</span> 填空：本体版本管理（VersionManager）现在位于 semantica.______ 子包。</div>
+      <input type="text" class="fill" placeholder="子包名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-9" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— explorer 子包（FastAPI 应用，含 Ontology Hub / SHACL Studio 等界面与路由）。"
+         data-rationale="explorer/ 是 Web 工作台，README 演示视频的主角；server.py 是 REST API（无界面）；mcp_server 是 MCP 协议服务；visualization 是生成 HTML 可视化文件的库。第 12 章会读 explorer/routes/ontology.py。"
+         data-review="sec-entries">
+      <div class="prompt"><span class="qnum">Q9.</span> README 演示视频里的图浏览器 / Ontology Hub / SHACL Studio 界面，代码在哪个子包？</div>
+      <label class="opt"><input type="radio" name="q-5-9" value="a"> A. semantica.visualization</label>
+      <label class="opt"><input type="radio" name="q-5-9" value="b"> B. semantica.explorer</label>
+      <label class="opt"><input type="radio" name="q-5-9" value="c"> C. semantica.server</label>
+      <label class="opt"><input type="radio" name="q-5-9" value="d"> D. semantica.mcp_server</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="5-10" data-type="short"
+         data-key-points='["定位：LLM 之下确定性基础设施；建图/推理/溯源不需要 LLM","九阶段流水线及各阶段对应子包（ingest→…→kg→智能层→存储→输出）","27 子包五分组，智能层 = ontology/reasoning/provenance/context，change_management 独立","KG 字典是通用货币；ContextGraph 是运行时对象；to_kg_dict() 是官方桥","四入口：Python/CLI/REST/MCP + explorer 工作台"]'
+         data-answer="Semantica 是 LLM 之下的确定性基础设施层，核心流水线九阶段：Ingest→Parse→Normalize→Split→Extract→Conflicts→Dedup→KG→智能层→存储→输出，每阶段独立可导入。27 个子包按摄取/清洗、抽取/质量、建图、智能层、存储/输出分组，另有平台入口（cli/server.py/mcp_server/explorer）和支撑层（core/utils/llms/embeddings/pipeline/seed/evals/change_management）。两个脊柱抽象：KG 字典 {"entities","relationships"} 是全 repo 通用货币；ContextGraph（context_graph.py:514）是带索引/分析/决策/时间旅行的运行时图，to_kg_dict() 是官方桥。使用入口四种：Python API、CLI、REST、MCP，外加 explorer 可视化工作台。"
+         data-rationale="五个要点：定位、流水线、子包分组、双抽象、入口。这是后续七章的地图，答不全建议重读 5.2/5.3。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：画出你脑内的 Semantica 地图——定位、九阶段流水线、智能层包含什么、两个脊柱抽象及它们的关系、四种入口。</div>
+      <textarea class="short" placeholder="用自己的话写，最好真的画一遍…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="06-dataflow.html"><strong>端到端数据流</strong></a>——跟着一批真实合同文档，
+    从 PDF 走到 Turtle 文件。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

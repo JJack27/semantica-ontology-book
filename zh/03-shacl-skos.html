@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 章 — SHACL 约束与 SKOS 词表</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 3 章 · 第一部分：领域基础</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="3">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 3 · 第一部分：本体领域基础</div>
+    <h1>SHACL 约束与 SKOS 词表</h1>
+    <p class="lede">
+      第 2 章留下一个悬念：RDF/OWL 只会「推出事实」，不会「拒绝数据」。可真实系统偏偏需要
+      「入库前校验：名字必填、类型必须是整数、取值必须在允许集合里」。
+      <strong>SHACL</strong>（Shapes Constraint Language）补上这块拼图；
+      <strong>SKOS</strong>则解决另一个朴素需求——不用完整 OWL，只想要一套受控词表。
+      这两个 W3C 标准恰好都是 Semantica 实打实实现了的（也有一个实现与文档有落差的地方，本章会点破）。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能读懂并手写一个 SHACL NodeShape + PropertyShape，用 minCount / datatype / sh:in / sh:pattern 表达常见约束</li>
+      <li>能解释 SHACL 校验报告的结构（focusNode / resultPath / sourceConstraintComponent / resultSeverity）</li>
+      <li>能说清 SHACL 与 OWL 公理的分工：校验（找违规） vs 推理（补事实）</li>
+      <li>能对照 Semantica 源码指出：run_shacl_validation 是真实现（pyshacl），OntologyValidator.validate 是占位实现</li>
+      <li>能用 SKOS 的核心词（Concept / prefLabel / broader / ConceptScheme）组织一套主题词表，并知道它和 OWL 本体的分工</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-shacl-why">3.1 为什么需要 SHACL：RDF 世界缺的「约束检查」</h2>
+
+  <p>
+    把第 2 章的结论推到极端：一个只讲推理的世界里，<strong>任何数据都是「合法」的</strong>。
+    烤面包机 worksFor 公司？推理机只会耸耸肩，推出「烤面包机是人」。但在生产系统里，
+    数据有明确的形状要求：一家 Organization 必须有名字、估值必须是整数、
+    类型必须落在允许集合里。你需要一个东西，它看着数据图说<strong>「这不符合约定」</strong>，
+    并且指出<strong>谁、在哪个属性上、违反了哪条约束、有多严重</strong>。
+  </p>
+
+  <p>
+    W3C 2017 年标准化的 <strong>SHACL（Shapes Constraint Language）</strong>就是干这个的。
+    它的思路：你写一组<strong>形状（shapes）</strong>——「某个类的节点应该长什么样」的声明——
+    校验器（validator）拿形状去比对数据图，产出一份<strong>校验报告</strong>（也是一张 RDF 图）。
+    三个关键概念：
+  </p>
+
+  <ul>
+    <li><strong>NodeShape</strong>：约束的靶子——「哪些节点要被检查」（通常 <code>sh:targetClass</code> 指向一个类）。</li>
+    <li><strong>PropertyShape</strong>：约束的内容——「这些节点的某个属性（<code>sh:path</code>）必须满足什么」。</li>
+    <li><strong>约束组件</strong>（constraint component）：具体检查项——minCount、datatype、sh:in、pattern、closed……</li>
+  </ul>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-shacl-shapes">3.2 读写 Shapes：一个完整例子</h2>
+
+  <p>下面是一份约束 + 一份数据。先看约束（习惯上也写成 Turtle）：</p>
+
+  <pre><code>@prefix sh:  &lt;http://www.w3.org/ns/shacl#&gt; .
+@prefix ex:  &lt;https://example.org/&gt; .
+@prefix xsd: &lt;http://www.w3.org/2001/XMLSchema#&gt; .
+
+ex:OrganizationShape a sh:NodeShape ;
+    sh:targetClass ex:Organization ;          # 谁被检查：所有 rdf:type ex:Organization 的节点
+    sh:closed true ;                          # 封闭形状：没声明过的属性一律不许有
+    sh:ignoredProperties ( rdf:type ) ;       # （rdf:type 豁免）
+    sh:property [
+        sh:path ex:name ;                     # 属性路径：ex:name
+        sh:minCount 1 ;                       #   至少 1 个值（必填）
+        sh:maxCount 1 ;                       #   至多 1 个值（单值）
+        sh:datatype xsd:string ;              #   必须是字符串
+    ] ;
+    sh:property [
+        sh:path ex:valuation ;
+        sh:datatype xsd:long ;                #   必须是整数
+    ] ;
+    sh:property [
+        sh:path ex:industry ;
+        sh:in ( "SaaS" "Fintech" "Health" ) ; #   取值必须在允许集合里
+        sh:severity sh:Warning ;              #   违反它只算警告，不算错误
+    ] .</code></pre>
+
+  <p>再给两个待检的数据节点：</p>
+
+  <pre><code>ex:acme  a ex:Organization ; ex:name "Acme Corp" ; ex:valuation "1200000000"^^xsd:long ; ex:industry "Blockchain" .
+ex:ghost a ex:Organization ; ex:hometown "Roswell" .          # 没有 name，还有多余属性</code></pre>
+
+  <p>校验后你会得到一份<strong>报告</strong>（同样是 RDF，这里给出人读版本）：</p>
+
+  <pre><code>[Violation] ex:ghost   path=ex:name       MinCountConstraintComponent     至少需要 1 个值，实际 0
+[Violation] ex:ghost   path=ex:hometown   ClosedConstraintComponent       封闭形状不允许未声明属性
+[Warning]   ex:acme    path=ex:industry   InConstraintComponent           "Blockchain" 不在允许集合中</code></pre>
+
+  <p>四件事值得盯住：</p>
+  <ul>
+    <li><strong>每一行违规就是一个四元组</strong>：谁（focusNode）、哪个属性（resultPath）、
+        违反了哪类约束（sourceConstraintComponent）、多严重（resultSeverity）。
+        这个结构是 SHACL 规范定义的，所有实现都得输出它。</li>
+    <li><strong>severity 分三档</strong>：<code>sh:Violation</code>（违规，conforms=false）、
+        <code>sh:Warning</code>、<code>sh:Info</code>。后两档不把整个报告判为不合规——
+        「业界不在允许集合」值得人看一眼，但不该挡住整批数据。</li>
+    <li><strong>sh:closed 是「封闭形状」</strong>：没在 shape 里声明的属性一律报错。
+        这是把数据库「列必须先声明」的封闭性带进 RDF 世界的开关——第 1 章讲的开闭世界之辨，
+        在这里以每个 shape 为粒度重新拿回了主动权。</li>
+    <li><strong>SHACL 不改数据</strong>。它只报告，不修复、不推理、不加三元组。
+        想修复要么自己写代码，要么走冲突解决（第 6 章）。</li>
+  </ul>
+
+  <div class="demo" data-demo="shaclPlayground">
+    <div class="demo-title">动手试 — 迷你 SHACL 校验器</div>
+    <p>一组固定约束（name 必填、valuation 必须整数、类型必须在集合内）跑在三个实体上。
+       勾选「破坏数据」选项再运行，观察报告里 focusNode / path / 约束类型 / severity 的变化。</p>
+    <label class="opt"><input type="checkbox" data-mutation="noName"> 破坏：把 Acme 的 name 删掉</label>
+    <label class="opt"><input type="checkbox" data-mutation="badType"> 破坏：把 Alice 的类型改成 Toaster</label>
+    <button data-run>运行校验</button>
+    <div class="demo-output empty">点击按钮运行。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-shacl-vs-owl">3.3 SHACL vs OWL 公理：一对好搭档的分工</h2>
+
+  <p>
+    新手最常见的困惑：「OWL 的 <code>owl:cardinality</code> 不也能限制个数吗？要 SHACL 干嘛？」
+    区别在<strong>语义方向</strong>：
+  </p>
+
+  <ul>
+    <li>OWL 基数是<strong>解释数据的公理</strong>：如果 alice 有两个 biologicalMother，
+        OWL 推出的结论是「这两个母亲是同一个实体」（owl:sameAs）——它相信数据，去补全世界。</li>
+    <li>SHACL 基数是<strong>审视数据的约束</strong>：同样场景，SHACL 直接报告
+        MaxCountConstraintComponent 违规——它相信约定，去挑数据的刺。</li>
+  </ul>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OWL 推理与 SHACL 校验的分工">
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="40" y="30" width="300" height="170" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="190" y="60" text-anchor="middle" font-size="14" font-weight="700">OWL 公理 —— 推理</text>
+      <text style="fill:var(--fg-dim)" x="190" y="90" text-anchor="middle" font-size="11">输入：数据 + 公理</text>
+      <text style="fill:var(--fg-dim)" x="190" y="112" text-anchor="middle" font-size="11">输出：更多三元组（隐含事实）</text>
+      <text style="fill:var(--fg-dim)" x="190" y="134" text-anchor="middle" font-size="11">或：矛盾（不一致）</text>
+      <text style="fill:var(--warn)" x="190" y="168" text-anchor="middle" font-size="11">问：「还能知道什么？」</text>
+      <text style="fill:var(--warn)" x="190" y="186" text-anchor="middle" font-size="11">世界观：开放世界，相信数据</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="380" y="30" width="300" height="170" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="530" y="60" text-anchor="middle" font-size="14" font-weight="700">SHACL —— 校验</text>
+      <text style="fill:var(--fg-dim)" x="530" y="90" text-anchor="middle" font-size="11">输入：数据 + shapes</text>
+      <text style="fill:var(--fg-dim)" x="530" y="112" text-anchor="middle" font-size="11">输出：验证报告（违规清单）</text>
+      <text style="fill:var(--fg-dim)" x="530" y="134" text-anchor="middle" font-size="11">不新增、不修改任何三元组</text>
+      <text style="fill:var(--warn)" x="530" y="168" text-anchor="middle" font-size="11">问：「这批数据合格吗？」</text>
+      <text style="fill:var(--warn)" x="530" y="186" text-anchor="middle" font-size="11">世界观：按约定审视，挑数据的刺</text>
+    </svg>
+    <figcaption>工业 KG 的标准姿势是两者并用：SHACL 守门（入库/出库校验），OWL/RDFS 推理扩知（补全隐含关系）。
+    Semantica 的口号「SHACL 约束 + 可解释推理」正对应这对搭档。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-shacl-semantica">3.4 对照真码：一个真实现，一个占位实现</h2>
+
+  <p>
+    Semantica 里 SHACL 有两条代码路径，<strong>成熟度天差地别</strong>——这是读源码比读 README
+    值钱的地方。
+  </p>
+
+  <p><strong>真实现：<code>run_shacl_validation()</code></strong>（<code>semantica/ontology/ontology_validator.py:148-273</code>）。
+  它调用 <code>pyshacl.validate()</code>（Python 的 SHACL 标准实现），然后把 pyshacl 返回的
+  RDF 结果图解析成结构化的 <code>SHACLValidationReport</code>：</p>
+
+  <pre><code># semantica/ontology/ontology_validator.py:194-217（节选）
+conforms, results_graph, results_text = pyshacl.validate(
+    data_g, shacl_graph=shacl_g, inference="none", abort_on_first=False)
+
+SH = rdflib.Namespace("http://www.w3.org/ns/shacl#")
+for result in results_graph.subjects(rdflib.RDF.type, SH.ValidationResult):
+    focus = str(results_graph.value(result, SH.focusNode) or "")        # ← 谁违规
+    path  = results_graph.value(result, SH.resultPath)                  # ← 哪个属性
+    sev   = str(results_graph.value(result, SH.resultSeverity))         # ← 多严重
+    src   = results_graph.value(result, SH.sourceConstraintComponent)   # ← 哪类约束</code></pre>
+
+  <p>
+    你刚才在演示里玩的 focusNode / path / 约束组件 / severity 四元组，就是这里逐字段抽出来的。
+    实现还很贴心：按 severity 分桶（violations / warnings / infos），并回查源 shape 里的
+    minCount / datatype / class 真实参数，给每条违规生成一句人话解释
+    （<code>explain_violations()</code>，第 82–135 行，模板包括 MinCount/MaxCount/Datatype/Class/In/Pattern/Closed 七种）。
+    注意它依赖 <code>pyshacl</code>，没装会抛 ImportError 提示 <code>pip install semantica[shacl]</code>——
+    extra 依赖，默认不装。
+  </p>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 文档 vs 代码：OntologyValidator.validate() 是占位实现</div>
+    <p style="margin:.3rem 0;">
+      README 的 ontology 示例展示的是另一个类：<code>OntologyValidator().validate(ontology)</code>
+      返回 <code>ValidationResult(valid=True, consistent=True, satisfiable=True, ...)</code>。
+      打开源码（<code>ontology_validator.py:326-382</code>）你会发现：
+    </p>
+    <pre style="margin:.5rem 0;"><code># 第 340-354 行，原文如此
+# Placeholder implementation for now
+# In a real implementation, this would load owlready2 or similar
+...
+if self.check_consistency:
+    # Logic to check consistency would go here
+    pass                              ← 一致性检查：什么都不做
+if self.check_satisfiability:
+    pass                              ← 可满足性：同样什么都不做</code></pre>
+    <p style="margin:.3rem 0;">
+      构造参数 <code>reasoner="hermit"</code> 被接受但从未使用；<code>check_constraint()</code>
+      恒返回 <code>True</code>（第 381 行注释自己承认是 placeholder）。
+      也就是说 <code>ValidationResult</code> 里那个 <code>consistent=True, satisfiable=True</code>
+      是<strong>默认值，不是检查结论</strong>——真正的检查只有「字典里有没有 classes/properties 键」这一条结构性提醒。
+      模块 docstring 里写的「HermiT/Pellet reasoning」目前<strong>并未实现</strong>。
+      要做真校验请用 <code>run_shacl_validation()</code>（SHACL 路线），或等后续版本补上符号推理。
+      读完这本书，你应该能一眼识别这种「API 面子、占位里子」的代码。
+    </p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-skos">3.5 SKOS：轻量级的受控词表</h2>
+
+  <p>
+    不是所有知识组织工作都需要 OWL 级的形式化。图书馆的主题词表、产品分类树、
+    部门技能标签——这些东西只需要「一堆概念 + 层级 + 别名 + 关联」，推理能力是奢侈品。
+    <strong>SKOS（Simple Knowledge Organization System）</strong>为它们设计，核心词汇一眼看完：
+  </p>
+
+  <table>
+    <thead><tr><th>SKOS 谓语</th><th>意思</th></tr></thead>
+    <tbody>
+      <tr><td><code>skos:Concept</code></td><td>一个概念（节点类型）</td></tr>
+      <tr><td><code>skos:prefLabel</code> / <code>skos:altLabel</code></td><td>首选名 / 别名（就是第 1 章「名字只是属性」的标准化版本）</td></tr>
+      <tr><td><code>skos:broader</code> / <code>skos:narrower</code></td><td>上下位（更宽/更窄的概念），两者互为反向</td></tr>
+      <tr><td><code>skos:related</code></td><td>相关但无层级关系</td></tr>
+      <tr><td><code>skos:ConceptScheme</code></td><td>整套词表的容器；<code>skos:inScheme</code> 把概念挂进去</td></tr>
+      <tr><td><code>skos:notation</code> / <code>skos:definition</code></td><td>编码（如分类号）/ 定义</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code>ex:MachineLearning a skos:Concept ;
+    skos:prefLabel "machine learning"@en, "机器学习"@zh ;
+    skos:altLabel "ML"@en, "机器學習"@zh-TW ;
+    skos:broader ex:ArtificialIntelligence ;     # 上位概念
+    skos:related ex:Statistics ;
+    skos:inScheme ex:TechTaxonomy .</code></pre>
+
+  <p>
+    SKOS 和 OWL 的分工：SKOS <strong>描述</strong>概念（标签、层级，供人浏览和检索），
+    OWL <strong>规定</strong>概念（公理、定义域，供机器推理）。层级语义天差地别——
+    <code>skos:broader</code>只是「导航意义上的上下位」，没有 subClassOf 的形式化传递与继承承诺，
+    所以把 SKOS 层级当 OWL 类层级去推理是错误用法。一个项目里两者常共存：
+    概念词表用 SKOS 管理，实体类型体系用 OWL 表达。
+  </p>
+
+  <p>
+    Semantica 对 SKOS 的支持很务实：核心是 <strong>词表图的层级完整性守卫</strong>——
+    <code>semantica/utils/skos.py</code> 的 <code>validate_skos_hierarchy()</code> 在写入新的
+    broader/narrower 边之前做<strong>环检测</strong>（broader 指向父、narrower 归一化成同一个方向后
+    DFS 查环），防止词表层级被写成一个环。README 里说的「SKOS vocabulary management with a visual
+    editor」指的就是 explorer 的词表管理界面（第 12 章会看到 <code>explorer/routes/vocabulary.py</code>）。
+    另外，SKOS 是「名字只是属性」的正式化：同一概念的多语言 prefLabel、altLabel 并存——
+    呼应第 1 章的实体同一性讨论。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">3.6 本章回顾</h2>
+  <ul>
+    <li><strong>SHACL</strong> 用 shapes（NodeShape 定靶 + PropertyShape 定则）<strong>校验</strong>数据图，
+        产出结构化报告；它不改数据、不推理。</li>
+    <li>违规四元组：<code>focusNode</code>（谁）+ <code>resultPath</code>（哪个属性）+
+        <code>sourceConstraintComponent</code>（哪类约束）+ <code>resultSeverity</code>（Violation/Warning/Info）。</li>
+    <li>常用约束：<code>sh:minCount/maxCount</code>（必填/单值）、<code>sh:datatype</code>（类型）、
+        <code>sh:in</code>（枚举）、<code>sh:pattern</code>（正则）、<code>sh:closed</code>（封闭形状）。</li>
+    <li><strong>OWL 推理 vs SHACL 校验</strong>：一个相信数据去补全世界，一个相信约定去挑数据的刺；
+        工业 KG 两者并用——SHACL 守门，OWL 扩知。</li>
+    <li>Semantica 源码：<code>run_shacl_validation()</code>（pyshacl）是<strong>真实现</strong>，带 severity 分桶与
+        人话解释；<code>OntologyValidator.validate()</code> 是<strong>占位实现</strong>，
+        consistent/satisfiable 是默认值而非检查结论，hermit/pellet 参数未使用。</li>
+    <li><strong>SKOS</strong>：Concept + prefLabel/altLabel + broader/narrower + ConceptScheme——
+        面向人的受控词表；broader 没有 subClassOf 的形式化语义。Semantica 用
+        <code>validate_skos_hierarchy()</code> 做层级环检测。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>把 SHACL 当推理引擎</strong>——它只报告违规；想补全事实要回 OWL/RDFS 或规则引擎。</li>
+      <li><strong>看到 consistent=True 就放心</strong>——先确认它是算出来的还是默认值
+          （Semantica 的 OntologyValidator 目前就是默认值）。</li>
+      <li><strong>忘记 pyshacl 是可选依赖</strong>——<code>run_shacl_validation</code> 需要
+          <code>pip install semantica[shacl]</code>，裸装包会 ImportError。</li>
+      <li><strong>Warning 也当致命错误</strong>——severity 三档里只有 Violition 让 conforms=false；
+          Warning/Info 是给人看的信号。</li>
+      <li><strong>拿 skos:broader 做类型推理</strong>——SKOS 层级是导航语义，没有 subClassOf 的
+          传递继承承诺；推理请用 OWL。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="3">
+    <h2>第 3 章测试</h2>
+
+    <div class="q" data-id="3-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 校验并报告违规，不修改、不推理数据。"
+         data-rationale="SHACL 的输出是验证报告（conforms + 违规清单），它既不删除/修复数据（A），也不新增三元组（C），更不是查询语言（D——那是 SPARQL）。修复要靠冲突解决逻辑，扩知要靠推理。"
+         data-review="sec-shacl-why">
+      <div class="prompt"><span class="qnum">Q1.</span> 一份数据图没通过 SHACL 校验。SHACL 引擎接下来会做什么？</div>
+      <label class="opt"><input type="radio" name="q-3-1" value="a"> A. 自动删除违规三元组</label>
+      <label class="opt"><input type="radio" name="q-3-1" value="b"> B. 输出一份报告：谁、哪个属性、违反哪类约束、什么严重级别</label>
+      <label class="opt"><input type="radio" name="q-3-1" value="c"> C. 推理出修复所需的新三元组并写入</label>
+      <label class="opt"><input type="radio" name="q-3-1" value="d"> D. 拒绝返回任何结果，抛异常</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-2" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— sh:targetClass 决定哪些节点被这个 shape 检查（ rdf:type 是该类的所有节点）。"
+         data-rationale="NodeShape 回答「约束作用于谁」：sh:targetClass ex:Organization ⇒ 所有 Organization 实例进入检查范围。sh:property（A）声明的是 PropertyShape 列表；sh:path（B）在 PropertyShape 里指定属性；sh:severity（D）设定违反时的严重级别。"
+         data-review="sec-shacl-shapes">
+      <div class="prompt"><span class="qnum">Q2.</span> NodeShape 里的 <code>sh:targetClass ex:Organization</code> 的作用是？</div>
+      <label class="opt"><input type="radio" name="q-3-2" value="a"> A. 声明要检查哪些属性</label>
+      <label class="opt"><input type="radio" name="q-3-2" value="b"> B. 指定属性的取值路径</label>
+      <label class="opt"><input type="radio" name="q-3-2" value="c"> C. 圈定检查对象：所有 rdf:type 为 ex:Organization 的节点</label>
+      <label class="opt"><input type="radio" name="q-3-2" value="d"> D. 设定违规的严重级别</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-3" data-type="mcq" data-multiselect="true" data-correct='["a","b","d"]'
+         data-answer="A、B、D —— 这三个（外加 Warning）正是 SHACL 的标准严重级别体系相关项；C 的 sh:Violation 才是级别，sh:Error 不是标准词。"
+         data-rationale="SHACL 三档：sh:Violation（违规，conforms=false）、sh:Warning（警告）、sh:Info（信息）。只有 Violation 会让整份报告不合规。C 混入了不存在的 sh:Error。注意多选题干问「属于」，A/B/D 均属于（Violation 就是级别之一），这是标准的「选全部正确项」。"
+         data-review="sec-shacl-shapes">
+      <div class="prompt"><span class="qnum">Q3.</span> 关于 SHACL 的 severity，以下说法/取值正确的有？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-3-3" value="a"> A. sh:Warning 违规不会让整份报告 conforms=false</label>
+      <label class="opt"><input type="checkbox" name="q-3-3" value="b"> B. sh:Info 是三级中的一级</label>
+      <label class="opt"><input type="checkbox" name="q-3-3" value="c"> C. sh:Error 是标准严重级别之一</label>
+      <label class="opt"><input type="checkbox" name="q-3-3" value="d"> D. sh:Violation 违规会使 conforms=false</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-4" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— SHACL 报告 MaxCount 违规（挑数据的刺）；OWL 会推出两个值 sameAs（相信数据去补全）。"
+         data-rationale="这是两种语义方向的教科书式对比：SHACL FunctionalProperty 视角 → MaxCountConstraintComponent 违规；OWL functional property 公理 → b sameAs c。工程上选哪个取决于你要守门（校验）还是扩知（推理）。"
+         data-review="sec-shacl-vs-owl">
+      <div class="prompt"><span class="qnum">Q4.</span> 数据里 alice 的 biologicalMother 有两个不同的值。如果同时存在「SHACL maxCount 1 约束」和「OWL functional property 公理」，两者分别给出什么？</div>
+      <label class="opt"><input type="radio" name="q-3-4" value="a"> A. 都报告违规</label>
+      <label class="opt"><input type="radio" name="q-3-4" value="b"> B. 都推出两个值等价</label>
+      <label class="opt"><input type="radio" name="q-3-4" value="c"> C. SHACL 推 sameAs，OWL 报违规</label>
+      <label class="opt"><input type="radio" name="q-3-4" value="d"> D. SHACL 报 MaxCount 违规，OWL 推出两个母亲 sameAs</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-5" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— run_shacl_validation()（调 pyshacl）是真实现；OntologyValidator.validate() 目前是占位实现，一致性/可满足性检查是 pass。"
+         data-rationale="ontology_validator.py:326-361 的注释自陈「Placeholder implementation」，reasoner 参数未用、consistent/satisfiable 是默认值。而 run_shacl_validation（148-273 行）完整解析 pyshacl 结果并分桶、生成解释。依赖 pyshacl 需要 semantica[shacl] extra（A 错在说它随裸包装好；B/D 把两个类的角色说反了）。"
+         data-review="sec-shacl-semantica">
+      <div class="prompt"><span class="qnum">Q5.</span> 关于 Semantica 的 SHACL/校验实现，与源码一致的说法是？</div>
+      <label class="opt"><input type="radio" name="q-3-5" value="a"> A. run_shacl_validation 随核心包默认可用，无需额外依赖</label>
+      <label class="opt"><input type="radio" name="q-3-5" value="b"> B. OntologyValidator.validate() 调用 HermiT 做一致性检查</label>
+      <label class="opt"><input type="radio" name="q-3-5" value="c"> C. run_shacl_validation 是真实现；OntologyValidator.validate 是占位，consistent/satisfiable 只是默认值</label>
+      <label class="opt"><input type="radio" name="q-3-5" value="d"> D. 两个入口都是完整实现</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-6" data-type="fill" data-accepted='["pyshacl","pyshacl（pip install semantica[shacl]）","pyshacl (pip install semantica[shacl])"]'
+         data-answer="pyshacl（通过 pip install semantica[shacl] 安装）。"
+         data-rationale="run_shacl_validation 内部 import pyshacl，未安装时抛 ImportError 并提示安装 extra。rdflib 负责图解析，校验本身由 pyshacl 执行。"
+         data-review="sec-shacl-semantica">
+      <div class="prompt"><span class="qnum">Q6.</span> 填空：Semantica 的 run_shacl_validation() 底层依赖的 SHACL 校验库是 ______（不是 rdflib）。</div>
+      <input type="text" class="fill" placeholder="库名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-7" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— skos:prefLabel 指定首选名，altLabel 存别名；这是「名字只是属性」的标准化版本。"
+         data-rationale="B 的 skos:broader 是层级谓语不是名字；C 的 label 是 rdfs: 的通用标注，不是 SKOS 的首选名机制；D 同性。SKOS 用 prefLabel/altLabel（以及 hiddenLabel）把「一个概念、多个名称」形式化，还支持语言标签（@en/@zh）。"
+         data-review="sec-skos">
+      <div class="prompt"><span class="qnum">Q7.</span> 在 SKOS 里，为一个概念声明首选名称和别名的谓语是？</div>
+      <label class="opt"><input type="radio" name="q-3-7" value="a"> A. skos:prefLabel 和 skos:altLabel</label>
+      <label class="opt"><input type="radio" name="q-3-7" value="b"> B. skos:broader 和 skos:narrower</label>
+      <label class="opt"><input type="radio" name="q-3-7" value="c"> C. rdfs:label 和 rdfs:comment</label>
+      <label class="opt"><input type="radio" name="q-3-7" value="d"> D. skos:inScheme 和 skos:notation</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-8" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— 归一化 broader/narrower 方向后对新旧边做环检测，防止词表层级成环。"
+         data-rationale="utils/skos.py 的 validate_skos_hierarchy 把 skos:broader（子→父）与 skos:narrower（反向）统一成 child→parent 邻接表再 DFS；只检查被新边触及的概念，已存在于旧边内部的环不会阻塞无关写入。A/B/C 都不是它的职责（那些属于 ontology/SHACL/推理层）。"
+         data-review="sec-skos">
+      <div class="prompt"><span class="qnum">Q8.</span> Semantica 的 <code>validate_skos_hierarchy()</code>（semantica/utils/skos.py）具体做什么？</div>
+      <label class="opt"><input type="radio" name="q-3-8" value="a"> A. 对 SKOS 概念做 OWL 一致性推理</label>
+      <label class="opt"><input type="radio" name="q-3-8" value="b"> B. 校验 prefLabel 的语言标签合法性</label>
+      <label class="opt"><input type="radio" name="q-3-8" value="c"> C. 运行 SHACL shapes 校验词表图</label>
+      <label class="opt"><input type="radio" name="q-3-8" value="d"> D. 写入 broader/narrower 边之前做环检测，防止层级成环</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-9" data-type="fill" data-accepted='["sh:closed","closed","sh:closed true","closed shape","封闭形状"]'
+         data-answer="sh:closed true（封闭形状）。"
+         data-rationale="默认 shape 是开放的（多余属性不报错）；声明 sh:closed true 后，任何未在 shape 中声明的属性都会触发 ClosedConstraintComponent 违规——相当于把数据库「列须先声明」的封闭性带回 RDF。"
+         data-review="sec-shacl-shapes">
+      <div class="prompt"><span class="qnum">Q9.</span> 填空：要让 SHACL 把「数据里出现了 shape 未声明的属性」报为违规，需要在 NodeShape 上声明 ______。</div>
+      <input type="text" class="fill" placeholder="例如：sh:xxx">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="3-10" data-type="short"
+         data-key-points='["SHACL 用 NodeShape/PropertyShape 声明数据应满足的形状，只校验报告、不改数据","违规四元组 focusNode/resultPath/sourceConstraintComponent/resultSeverity，severity 三档","OWL 推理 vs SHACL 校验的方向差异（相信数据补全 vs 相信约定挑刺），工业上并用","Semantica：run_shacl_validation 是真实现（pyshacl、需 extra）；OntologyValidator.validate 是占位（hermit 参数未用、consistent/satisfiable 为默认值）","SKOS：Concept/prefLabel/altLabel/broader/ConceptScheme，面向人的词表，broader 无形式化推理语义"]'
+         data-answer="SHACL 以 NodeShape（sh:targetClass 圈定对象）+ PropertyShape（sh:path + 约束组件如 minCount/datatype/sh:in/sh:closed）声明数据形状；校验输出报告，每条违规含 focusNode、resultPath、sourceConstraintComponent、resultSeverity（Violation 才使 conforms=false），不修改数据。它与 OWL 分工：OWL 相信数据补全事实/发现矛盾，SHACL 相信约定挑数据的刺，工业 KG 两者并用。Semantica 中 run_shacl_validation()（pyshacl，需装 semantica[shacl]）是真实现，含 severity 分桶与解释模板；OntologyValidator.validate() 是占位实现，hermit/pellet 参数未使用，consistent/satisfiable 是默认值。SKOS 用 Concept/prefLabel/altLabel/broader/narrower/ConceptScheme 组织面向人的受控词表，broader 是导航语义不能当 subClassOf 推理；Semantica 用 validate_skos_hierarchy() 做层级环检测。"
+         data-rationale="五个要点：shapes 结构、报告四元组、OWL/SHACL 分工、Semantica 真假实现之辨、SKOS 定位。特别是第四点——能说清「哪个是真实现哪个是占位」说明你真的读了源码。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：(1) SHACL 的 shape 结构和报告结构分别是什么？(2) OWL 和 SHACL 如何分工？(3) Semantica 里哪条 SHACL 路径是真实现、哪条是占位？(4) SKOS 适合什么场景、broader 能否当 subClassOf 用？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="04-ontology-engineering.html"><strong>本体工程方法论</strong></a>——
+    从零建本体的正确姿势：先问什么、复用什么、怎么命名、怎么演进。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

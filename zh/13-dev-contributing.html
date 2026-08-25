@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 13 章 — 开发环境与贡献地图</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 13 章 · 第四部分：上手实操</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="13">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 13 · 第四部分：上手实操</div>
+    <h1>开发环境与贡献地图：从读者到提交者</h1>
+    <p class="lede">
+      最后一章解决「接下来动手」：把环境跑起来、看懂测试地图、走通贡献流程，
+      并且——本书一路攒下的四个「文档 vs 代码」发现，此刻全部变成<strong>你的 PR 候选</strong>。
+      读完这章，你就是这个 repo 的专家了：不是背过 API 的那种，而是知道边界在哪、
+      知道哪里值得改的那种。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能从零搭好开发环境（dev extras + shacl extra）并跑通 tests/ontology/ 全部测试</li>
+      <li>能说出 tests/ontology/ 六个测试文件各自守什么，以及 #1104 回归测试的位置</li>
+      <li>能描述这个 repo 的贡献工作流（issue 优先、重复 PR 政策、多类型贡献）</li>
+      <li>能把本书发现的四处「文档 vs 代码」落差转化为可执行的 PR 计划</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-setup">13.1 本地环境：装、跑、体检</h2>
+
+  <pre><code>git clone https://github.com/&lt;你的 fork&gt;/semantica && cd semantica
+python -m venv .venv && source .venv/bin/activate
+
+pip install -e ".[dev,shacl]"     # dev=pytest 等；shacl=pyshacl（第 3/10 章的闭环要用）
+semantica doctor                   # 体检：Python 版本、包版本、向量后端、配置文件
+
+pytest tests/ontology/ -x -q       # 首跑：本体模块全部测试</code></pre>
+
+  <p>
+    三个工程细节值得知道：<strong>①</strong> extras 体系（<code>pyproject.toml:101</code> 起）是
+    这个 polyglot repo 的减重术——shacl（:121）、llm-all、graph-all、vectorstore-all……
+    重依赖全部按需安装，核心包保持轻装；dev 环境的一体化安装清单在 :255（全家桶）。
+    <strong>②</strong> CI 里跑命令时记得 <code>SEMANTICA_DISABLE_PROGRESS=1</code>（README 环境变量节）：
+    进度条只在交互终端输出，但保险起见显式关掉。<strong>③</strong> <code>pytest</code> 配置在
+    <code>pyproject.toml:283</code>（testpaths=tests），仓库根目录直接 <code>pytest</code> 即可全量跑。
+    docker-compose.yml / docker-compose.dev.yml 在需要完整后端（图库、向量库）时用，
+    只玩 ontology 模块用不上。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-tests">13.2 测试地图：tests/ontology/ 的 2034 行</h2>
+
+  <table>
+    <thead><tr><th>文件</th><th>行数</th><th>守什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_ontology_comprehensive.py</code></td><td>668</td><td>生成流水线全链路（第 8 章的行为快照）</td></tr>
+      <tr><td><code>test_ontology_advanced.py</code></td><td>617</td><td>高级特性（评估/复用/命名空间等，第 11 章）</td></tr>
+      <tr><td><code>test_shacl_target_namespace.py</code></td><td>330</td><td><strong>#1104 假合格回归</strong>（第 10 章的纪念碑）</td></tr>
+      <tr><td><code>test_notebook_14.py</code></td><td>199</td><td>cookbook 第 14 号 notebook 的回归（示例不许烂）</td></tr>
+      <tr><td><code>test_vocabulary.py</code></td><td>116</td><td>semantica.dev/ns 词表完整性（第 12 章的原则守卫）</td></tr>
+      <tr><td><code>test_ontology_classes.py</code></td><td>104</td><td>类推断单元（第 9 章的算法）</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    读测试是读懂一个模块最快的方式——它们是「真实可执行的行为规格」。改 ontology 相关代码前，
+    先让这六个文件在你机器上绿；改完再跑一遍。特别是 <code>test_shacl_target_namespace.py</code>：
+    它断言的东西（shapes 圈错命名空间必须被识别为问题）直接对应第 10 章那个最阴险的坑。
+    另外 <code>test_notebook_14.py</code> 揭示了这个 repo 的一个好习惯：<strong>cookbook 示例也是被测代码</strong>——
+    文档腐烂从示例开始，所以他们把示例钉进了 CI。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-workflow">13.3 贡献工作流</h2>
+
+  <p>
+    <code>CONTRIBUTING.md</code> 的要点浓缩：<strong>issue 优先</strong>（先找/建 issue 再动手，
+    避免白干）；<strong>重复 PR 政策</strong>（同名 issue 下以首个合格 PR 为准——动手前扫一眼已有 PR）；
+    贡献类型远不止代码——文档、测试、bug 报告、cookbook 示例、教育内容都被明示欢迎；
+    提交前本地跑测试 + 可选的 pre-commit hooks。
+    流程：fork → clone → venv → <code>pip install -e ".[dev]"</code> → 改 → 测 → PR（关联 issue 编号）。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-first-pr">13.4 你的前三个 PR 候选（本书的发现清单）</h2>
+
+  <p>
+    精读一路，我们攒下了四处「文档 vs 代码」落差。它们不是 repo 的耻辱——
+    是快速演进开源项目的常态，更是<strong>新专家最好的入场券</strong>（小、明确、有测试可写）：
+  </p>
+
+  <ol>
+    <li><strong>similarity_threshold：实现或删除</strong>（第 9 章）。参数收而不用。
+        方案 A：在 <code>ClassInferrer</code> 里实现真正的相似度合并（实体类型名嵌入或编辑距离过阈值合并）；
+        方案 B（更轻）：移除参数 + 修正 <code>__init__.py</code> 模块 docstring 里的宣传。
+        附带单测即可提交。</li>
+    <li><strong>OntologyValidator：接真验证或诚实降级</strong>（第 3、8 章）。方案 A：内部转调
+        <code>run_shacl_validation</code>（pyshacl 可选依赖，缺失时降级为结构检查并 warning）；
+        方案 B：把 <code>consistent/satisfiable</code> 从默认 True 改为 <code>None</code>（未检查），
+        并同步修正 5/6 阶段的三处口径（generate_ontology docstring、进度消息、模块 docstring 的
+        HermiT/Pellet 措辞）。</li>
+    <li><strong>generate_ontology 的 5/6 阶段口径统一</strong>（第 8 章，可并入上一条）。
+        docstring 说 5 阶段、进度消息说 6 阶段、模块注释点名 HermiT/Pellet——统一成一种诚实表述。</li>
+    <li><strong>ReteEngine alpha 匹配器增强</strong>（第 7 章，较大）：README 自己承认匹配器从简。
+        需要先写「当前行为 vs 期望行为」的失败测试矩阵再动实现——适合作为进阶贡献。</li>
+  </ol>
+
+  <p>
+    每一条都有明确的验收标准（测试），都在你现在已经精读过的文件里。提 PR 前重读
+    13.3 的工作流：先搜有没有同题 issue/PR。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">13.5 收官：专家自检清单</h2>
+
+  <p>合上书之前，过一遍这份清单——每一条你都应该能不看笔记答上来：</p>
+
+  <ul>
+    <li><strong>领域侧</strong>：三元组/IRI/字面量（1）；RDFS 五谓语与推理（2）；OWL 属性三分与公理（2）；
+        SHACL shapes/报告/与 OWL 分工（3）；SKOS 定位（3）；CQ/复用/命名/粒度/版本化方法论（4）。</li>
+    <li><strong>Repo 侧</strong>：九阶段流水线与 27 子包地图（5）；数据形状演变与双时间态（6）；
+        四件套协作（7）；六阶段生成的真实状态（8）；推断算法与参数真相（9）；
+        SHACL 生成与两个 issue 教训（10）；治理生态与 N 元关系（11）；四个平台集成点（12）。</li>
+    <li><strong>专家的元技能</strong>：读代码不信宣传语；看到 consistent=True 先问是算的还是默认的；
+        序列化当安全边界；API 的持久化语义看存储类型不看名字；知道边界的能力才是可用的能力。</li>
+  </ul>
+
+  <p>
+    你要的两个「expert」现在是一件事：<strong>本体领域的概念你都能在这个 repo 里指出对应的那行代码；
+    这个 repo 的每个模块你都能说出它在领域版图上的位置</strong>。这就是双专家的含义。
+    接下来：把 13.4 的 PR 候选做掉一个——从读者变成提交者，专家身份才算落章。
+  </p>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>裸装包就跑 SHACL 闭环</strong>——pyshacl 在 shacl extra 里，记得 <code>pip install -e ".[dev,shacl]"</code>。</li>
+      <li><strong>改代码不跑 tests/ontology/</strong>——六份测试是这个模块的行为快照，跳过等于盲改。</li>
+      <li><strong>不搜重复 PR 就开工</strong>——同名 issue 下已有合格 PR 时你的工作会被礼貌地关闭。</li>
+      <li><strong>一口气想修大东西</strong>——从文档/口径统一这类小而确定的 PR 建立信任，再上算法级改动。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="13">
+    <h2>第 13 章测试</h2>
+
+    <div class="q" data-id="13-1" data-type="fill" data-accepted='["dev,shacl","[dev,shacl]","dev+shacl","dev shacl"]'
+         data-answer="pip install -e ".[dev,shacl]"——dev 给 pytest，shacl 给 pyshacl（验证闭环需要）。"
+         data-rationale="extras 体系（pyproject.toml:101 起）让核心包轻装：dev 含测试工具（:224 pytest 系列），shacl 是 pyshacl（:121）。只玩 ontology 主流水线 dev 就够；要跑第 10 章的验证闭环必须加 shacl。"
+         data-review="sec-setup">
+      <div class="prompt"><span class="qnum">Q1.</span> 填空：要跑通本体模块开发与 SHACL 验证闭环，推荐的安装命令是 pip install -e ".______"。</div>
+      <input type="text" class="fill" placeholder="extras 写法">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-2" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— test_shacl_target_namespace.py（330 行）：shapes 圈错命名空间导致假合格的回归守卫。"
+         data-rationale="#1104 教训的纪念碑（第 10 章）。test_vocabulary.py 守词表完整性；test_ontology_classes.py 守类推断；test_notebook_14.py 守 cookbook 示例——每个文件对应书中一章的知识。"
+         data-review="sec-tests">
+      <div class="prompt"><span class="qnum">Q2.</span> 哪个测试文件是 #1104「假合格」漏洞的回归测试？</div>
+      <label class="opt"><input type="radio" name="q-13-2" value="a"> A. test_vocabulary.py</label>
+      <label class="opt"><input type="radio" name="q-13-2" value="b"> B. test_shacl_target_namespace.py</label>
+      <label class="opt"><input type="radio" name="q-13-2" value="c"> C. test_ontology_classes.py</label>
+      <label class="opt"><input type="radio" name="q-13-2" value="d"> D. test_notebook_14.py</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-3" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— cookbook notebook 也有回归测试：示例腐烂从文档开始，所以示例被钉进 CI。"
+         data-rationale="test_notebook_14.py（199 行）专门守 cookbook 第 14 号 notebook——这个 repo 把「文档示例」当作被测代码对待。README 的示例号称「verified against the current source tree」，测试是这句话的兑现机制。"
+         data-review="sec-tests">
+      <div class="prompt"><span class="qnum">Q3.</span> test_notebook_14.py 的存在说明了这个 repo 的什么习惯？</div>
+      <label class="opt"><input type="radio" name="q-13-3" value="a"> A. 测试文件按 notebook 编号随机命名</label>
+      <label class="opt"><input type="radio" name="q-13-3" value="b"> B. notebook 比单元测试更重要</label>
+      <label class="opt"><input type="radio" name="q-13-3" value="c"> C. cookbook 示例也有回归测试——示例是被测代码，不许烂</label>
+      <label class="opt"><input type="radio" name="q-13-3" value="d"> D. 只有第 14 号 notebook 存在</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-4" data-type="mcq" data-multiselect="true" data-correct='["b","d"]'
+         data-answer="B（先搜同题 issue/PR 避免重复）和 D（改 ontology 代码前后都跑 tests/ontology/）。A 说反（issue 优先是被鼓励的）；C 恰恰是要避免的。"
+         data-rationale="CONTRIBUTING.md 工作流：issue 优先（先认领/创建）、重复 PR 政策（同名 issue 首个合格 PR 为准）、本地测试后再提。小步建立信任比一步登天好。"
+         data-review="sec-workflow">
+      <div class="prompt"><span class="qnum">Q4.</span> 提交 PR 前的正确动作包括？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-13-4" value="a"> A. 不建 issue 直接闷头写，保持神秘感</label>
+      <label class="opt"><input type="checkbox" name="q-13-4" value="b"> B. 搜索是否已有同题 issue 和在途 PR</label>
+      <label class="opt"><input type="checkbox" name="q-13-4" value="c"> C. 一次性把四个大改全塞进一个 PR</label>
+      <label class="opt"><input type="checkbox" name="q-13-4" value="d"> D. 改 ontology 代码前后各跑一遍 tests/ontology/</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-5" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— similarity_threshold 实现或删除：范围小、验收明确、可附单测——新贡献者的理想入场券。"
+         data-rationale="第 9 章发现：参数收而不用。方案 A（实现相似度合并）偏进阶，方案 B（移除参数+修 docstring）极轻。相比之下 Rete 匹配器增强（B）工程量大；OntologyValidator（C）牵动验证语义需要设计讨论；注入修复（D）已经有人修了（220fb10e）。"
+         data-review="sec-first-pr">
+      <div class="prompt"><span class="qnum">Q5.</span> 四个 PR 候选里，最适合作为「第一个 PR」的是？</div>
+      <label class="opt"><input type="radio" name="q-13-5" value="a"> A. similarity_threshold 的实现或删除（附单测与 docstring 修正）</label>
+      <label class="opt"><input type="radio" name="q-13-5" value="b"> B. ReteEngine alpha 匹配器全面增强</label>
+      <label class="opt"><input type="radio" name="q-13-5" value="c"> C. OntologyValidator 接入完整符号推理</label>
+      <label class="opt"><input type="radio" name="q-13-5" value="d"> D. 重写 RDF 导出器的转义逻辑</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-6" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 语义分析上「不作为」与「声明通过」是两回事；把默认值改为 None（未检查）让 API 诚实。"
+         data-rationale="第 3/8 章的核心教训的修复方向：consistent=True 会误导使用者以为发生了检查。改成 None + 文档同步，是把「API 面子、占位里子」的问题诚实化。A 无济于事（还是默认 True）；B 保留误导；D 方向反了。"
+         data-review="sec-first-pr">
+      <div class="prompt"><span class="qnum">Q6.</span> 修复 OntologyValidator 误导性的最小诚实化方案是什么？</div>
+      <label class="opt"><input type="radio" name="q-13-6" value="a"> A. 保持现状，加一行注释</label>
+      <label class="opt"><input type="radio" name="q-13-6" value="b"> B. 把默认值改成 False</label>
+      <label class="opt"><input type="radio" name="q-13-6" value="c"> C. 把 consistent/satisfiable 默认改为 None（未检查），并同步修正三处文档口径</label>
+      <label class="opt"><input type="radio" name="q-13-6" value="d"> D. 删除整个验证结果字段</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-7" data-type="fill" data-accepted='["semantica doctor","doctor","semantica doctor"]'
+         data-answer="semantica doctor（环境体检命令）。"
+         data-rationale="装完先 doctor：检查 Python 版本、semantica 版本、向量后端、配置文件，5 秒确认安装健康。CI/脚本场景记得 SEMANTICA_DISABLE_PROGRESS=1。"
+         data-review="sec-setup">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：安装后 5 秒确认环境健康的命令是 ______。</div>
+      <input type="text" class="fill" placeholder="命令">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="13-8" data-type="short"
+         data-key-points='["环境：venv + pip install -e .[dev,shacl] + semantica doctor；extras 体系按需装重依赖","测试地图：六个文件对应书中各章（comprehensive/advanced/shacl_target_namespace/notebook_14/vocabulary/classes），改动前后必跑","贡献流程：issue 优先 + 重复 PR 政策 + 多类型贡献（文档/测试/cookbook 也算）","PR 候选：similarity_threshold、OntologyValidator 诚实化、5/6 阶段口径、Rete 匹配器——从小到大建立信任","元技能：读代码不信宣传；consistent=True 要问来源；序列化是安全边界；存储语义看类型不看名字"]'
+         data-answer="环境：venv + pip install -e ".[dev,shacl]"（extras 按需装 pyshacl 等重依赖）+ semantica doctor 体检。测试：tests/ontology/ 六文件是本体模块的行为快照（comprehensive 守流水线、shacl_target_namespace 守 #1104、vocabulary 守词表原则、notebook_14 守示例），改动前后必跑。贡献：issue 优先、注意重复 PR 政策、文档/测试/cookbook 都是被欢迎的贡献类型。PR 候选（按从小到大）：similarity_threshold 实现或删除 → OntologyValidator 诚实化（None 语义）+ 5/6 阶段口径统一 → Rete 匹配器增强。元技能：读代码不信宣传语、consistent=True 要问是算的还是默认的、序列化当安全边界、API 持久化语义看存储类型。"
+         data-rationale="五个要点：环境、测试地图、流程、PR 候选、元技能。全答到——这本书的目标（repo 专家 × 本体专家）达成了。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q8.</span> 收官综合：怎么搭环境、测试地图长什么样、贡献流程的关键规则、你的前三个 PR 候选、以及你带走的四条元技能。</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    全书完。回到 <a href="index.html"><strong>目录页</strong></a> 查看你的学习进度——
+    或者，现在就打开 terminal，把 13.4 的第一个 PR 做掉。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

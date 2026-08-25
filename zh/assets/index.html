@@ -1,0 +1,116 @@
+<!doctype html>
+<!--
+  Dashboard / table-of-contents page.
+  This is the entry point learners open. It shows progress across all chapters
+  and links to each one. Structure:
+    1. <head> with the single stylesheet link
+    2. <div class="topbar"> with brand + tagline + lang-toggle (no chapter-nav on index)
+    3. <main class="toc"> with toc-header, dashboard (progress bar),
+       optional knowledge-graph section (.kg), chapter-grid
+    4. Two inline scripts BEFORE book.js: window.BOOK_CONFIG and window.CHAPTER_DESCS
+    5. Cytoscape.js CDN scripts + <script src="assets/book.js" defer> (fills grid/dashboard)
+       + <script src="assets/graph.js" defer> (fills the .kg section, if present)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Book</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">◆ MY BOOK</span>
+  <span class="crumb">A subtitle or tagline goes here</span>
+  <span class="spacer"></span>
+  <a class="lang-toggle" href="../zh/index.html">中文 →</a>
+</div>
+
+<main class="toc">
+  <div class="toc-header">
+    <div class="logo">◆</div>
+    <h1>My Book</h1>
+    <p class="subtitle">
+      A one-paragraph description of the book: who it's for, what it covers,
+      and what the learner will be able to do after reading it.
+    </p>
+  </div>
+
+  <div class="dashboard">
+    <div class="progress-label">
+      <span>Your progress</span>
+      <span><strong id="progress-passed">0 / 1</strong> chapters · <strong id="progress-pct">0%</strong></span>
+    </div>
+    <div class="progress-bar"><div id="overall-progress" style="width:0%"></div></div>
+    <p class="small" style="margin-top:.7rem; margin-bottom:0;">
+      Progress is saved in your browser's <code>localStorage</code> — it survives reloads.
+      Take each chapter's test at the bottom; <strong>≥ 80% = learned enough to move forward</strong>
+      (soft gate — nothing locks).
+    </p>
+  </div>
+
+  <!-- OPTIONAL: knowledge graph. Delete this section, the graph.js script
+       tag below, and assets/graph.js to omit the feature. Author the
+       concept data in assets/graph.js (DATA START/END markers). The two
+       view modes reuse the chapter-test localStorage records. -->
+  <section class="kg" id="knowledge-graph">
+    <div class="kg-head">
+      <div>
+        <h2>Knowledge Graph</h2>
+        <p>The book's core concepts and how they connect. <strong>Progress view</strong> lights up only the
+          concepts from chapters you've passed; <strong>Full map view</strong> shows the complete graph.
+          Click a node to see the chapters and sections that teach it; drag nodes, scroll to zoom.</p>
+      </div>
+      <div class="kg-toggle" role="group" aria-label="Switch graph view">
+        <button type="button" data-mode="progress">Progress</button>
+        <button type="button" data-mode="full">Full map</button>
+      </div>
+    </div>
+    <div class="kg-layout">
+      <div class="kg-stage"></div>
+      <aside class="kg-panel" aria-live="polite"></aside>
+    </div>
+    <div class="kg-legend"></div>
+  </section>
+
+  <div class="chapter-grid"></div>
+
+  <div class="toc-footer">
+    Built with the <a href="https://github.com/your/repo">personal-book-forger</a> skill.
+    All diagrams are inline SVG; all demos run in your browser.
+    The knowledge graph is rendered by Cytoscape.js from a CDN, with an automatic
+    built-in fallback when offline.
+  </div>
+</main>
+
+<!-- BOOK_CONFIG: same object as on every chapter page. slug is kebab-case and
+     unique per book; it forms the localStorage key prefix with lang. -->
+<script>
+window.BOOK_CONFIG = {
+  slug: "my-book",
+  lang: "en",
+  chapters: [
+    { n: 1, slug: "01-example-chapter" }
+    // Add one entry per chapter: { n: 2, slug: "02-second-chapter" }, etc.
+  ]
+};
+// CHAPTER_DESCS: dashboard-only metadata (title + one-line description per
+// chapter). NOT duplicated in the chapter files — only used here to render
+// the chapter cards.
+window.CHAPTER_DESCS = {
+  1: { title: "Example Chapter",
+       desc: "The canonical chapter template. Every real chapter mirrors this structure." }
+};
+</script>
+<!-- Knowledge graph renderer (CDN, exact order matters: cytoscape →
+     layout-base → cose-base → cytoscape-fcose). If these fail to load
+     (offline), graph.js falls back to a built-in SVG layout. -->
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js" defer></script>
+<script src="assets/book.js" defer></script>
+<script src="assets/graph.js" defer></script>
+</body>
+</html>

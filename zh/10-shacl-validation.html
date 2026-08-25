@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 10 章 — SHACL 生成与验证</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 10 章 · 第三部分：ontology 深潜</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="10">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 10 · 第三部分：semantica.ontology 深潜</div>
+    <h1>SHACL 生成与验证：从数据长出的守门人</h1>
+    <p class="lede">
+      第 3 章学了 SHACL 理论、第 9 章学了本体怎么从数据推断——本章把两者接通：
+      <code>SHACLGenerator</code>（<code>ontology_generator.py:794</code>）本体字典 → shapes 图，
+      再交给第 3 章验明正身的 <code>run_shacl_validation()</code>（pyshacl）检验数据。
+      这是 ontology 模块里<strong>工程质量最高的部分</strong>——注释里躺着 #1104/#1105 两个
+      真实教训：「假合格」陷阱和「无中生有的约束」，都值得慢慢读。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能复述 SHACLGenerator 的内部六步流水线及每步产物</li>
+      <li>能解释继承传播（把父类 shapes 物化给子类）与 RDFS 类型上传的区别：物化 vs 推理</li>
+      <li>能说出 quality_tier=strict 做什么（closed=True）以及为什么只关闭「至少有一个属性」的形状</li>
+      <li>能讲清 #1104「假合格」陷阱：shapes 命名空间与目标命名空间为什么必须分开</li>
+      <li>能独立走通「本体 → SHACL 生成 → 序列化 → pyshacl 验证」的完整治理闭环</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-generator">10.1 SHACLGenerator：内部六步流水线</h2>
+
+  <pre><code>from semantica.ontology import SHACLGenerator, run_shacl_validation
+
+gen = SHACLGenerator(
+    base_uri="https://myco.dev/shapes/",        # shapes 自己住的命名空间
+    target_namespace="https://myco.dev/ontology/",  # 被检验术语的命名空间（见 10.3）
+    quality_tier="strict",
+)
+graph = gen.generate(ontology)          # → SHACLGraph
+shacl_turtle = gen.serialize(graph, format="turtle")</code></pre>
+
+  <p>
+    类 docstring（798–805 行）自带路线图，六步内部流水线：
+  </p>
+
+  <ol>
+    <li><code>_build_class_index()</code> —— 类名 → 类 dict 的 O(1) 索引；</li>
+    <li><code>_generate_node_shapes()</code> —— 每个 OWL 类一个 <code>NodeShape</code>；</li>
+    <li><code>_attach_property_shapes()</code> —— 属性按 domain 挂到对应 NodeShape 上；</li>
+    <li><code>_propagate_inheritance()</code> —— 父类的属性形状<strong>复制</strong>给子类（迭代式、防环）；</li>
+    <li><code>_apply_quality_tier()</code> —— strict 档把所有（有属性的）形状设 <code>closed=True</code>；</li>
+    <li><code>serialize()</code> —— Turtle / JSON-LD / N-Triples。</li>
+  </ol>
+
+  <p>
+    第 3 章的理论词汇在这里全部有实体：dataclass <code>PropertyShape</code>（:733）的字段就是
+    <code>sh:path / sh:datatype / sh:class / sh:minCount / sh:maxCount / sh:in / sh:pattern /
+    sh:severity</code>；<code>NodeShape</code>（:749）有 <code>target_class / property_shapes /
+    closed / severity</code>。你在演示里玩过的迷你校验器，这里长成了完整实现。
+  </p>
+
+  <p>
+    两个数据结构细节见功力：<code>SHACLGraph</code>（:779）里 <code>class_iris</code> 与
+    <code>property_iris</code> 是<strong>分开的两张映射</strong>——注释解释：属性与类同名是合法的，
+    合一张表会静默地把类的 IRI 错配给属性；<code>_mint_term_iri()</code>（:763）给裸名字铸 IRI 时
+    做百分号编码——"Customer Account" 直接拼进 IRI 会有空格，严格解析器当场拒绝。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-inheritance-tier">10.2 继承传播与质量档位</h2>
+
+  <p>
+    <strong>继承传播</strong>（<code>_propagate_inheritance</code>，:1148）值得单独讲：
+    Employee 的必填属性 name，其子类 Manager 也该被检查。RDFS 的做法是<strong>推理时上传</strong>
+    （Manager ⊑ Employee ⇒ manager 实例也是 Employee ⇒ 套 Employee 的规则）；
+    SHACL 的默认语义<strong>不做继承</strong>——所以生成器把父类的 PropertyShape
+    <strong>物化复制</strong>到每个子类形状里。「推理 vs 物化」是同一需求的两种工程解，
+    物化的好处是 shapes 图自包含（验证器无需理解本体层级），代价是图变大、
+    层级改动后要重新生成。迭代式实现 + 防环处理，对应第 9 章 DFS 环检测的同一担忧。
+  </p>
+
+  <p>
+    <strong>质量档位</strong>（<code>_apply_quality_tier</code>，:1170）是个聪明的开关：
+  </p>
+
+  <pre><code>if self.quality_tier == "strict":
+    for node_shape in graph.node_shapes:
+        if node_shape.property_shapes:      # 只关「至少声明了一个属性」的形状
+            node_shape.closed = True</code></pre>
+
+  <p>
+    strict 档打开第 3 章讲的<strong>封闭形状</strong>：没声明过的属性一律违规。
+    只关有属性的形状是个细致的防守：一个空形状（本体里只有名字没有属性的类）
+    如果 closed=True，会拒绝该类实例上的<strong>一切</strong>属性——误杀全部数据。
+    「默认开放、可选封闭、封闭只对有内容的形状」三段设计，读起来三行，想明白每行都得踩过坑。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-namespaces">10.3 两个命名空间的教训：#1104「假合格」与 #1105「无中生有」</h2>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ #1104：shapes 打自己命名空间 = 全员假合格</div>
+    <p style="margin:.3rem 0;">
+      构造器把 <code>base_uri</code>（shapes 资源住的命名空间，默认
+      <code>https://semantica.dev/shapes/</code>）和 <code>target_namespace</code>
+      （被检验术语住的命名空间）<strong>刻意分成两个参数</strong>。docstring（:831–835）记录了原因：
+      如果 shapes 的 <code>sh:targetClass</code> 指向 shapes 自己的命名空间，
+      数据图里没有任何东西住在那里——<strong>shapes 匹配不到任何节点</strong>，
+      而 pySHACL 对「没检查任何东西」的报告是 <code>conforms=true</code>！
+    </p>
+    <p style="margin:.3rem 0;">
+      这是 SHACL 体系里最阴险的坑：<strong>验证器不会区分「全对」和「根本没检查」</strong>。
+      一个指向错误命名空间的 shapes 文件会给你一张绿色的假合格证。回归测试
+      <code>tests/ontology/test_shacl_target_namespace.py</code> 就是这个教训的纪念碑。
+      审读任何「合格」报告前，先确认 shapes 真的圈住了数据。
+    </p>
+  </div>
+
+  <div class="box" style="border-left-color:var(--warn);">
+    <div class="box-title">#1105：attach_domainless_properties 默认关——无中生有的约束</div>
+    <p style="margin:.3rem 0;">
+      一个没有声明 domain 的属性该挂在哪？0.6.6 之前的行为：挂到<strong>每一个</strong>
+      NodeShape 上。听起来周到，实际是<strong>发明了本体从未说过的约束</strong>——
+      某个 data 属性突然要求所有类的实例都遵守它的 datatype/minCount，
+      数据一入库集体爆违规。修复：参数保留但默认 <code>False</code>（:825，docstring :836–839）。
+      教训：<strong>生成器可以补默认值，但不能替本体立法</strong>。
+    </p>
+  </div>
+
+  <p>
+    另一个顺手可学的映射表：<code>_XSD_ALIASES</code>（:807–815）把宽松的类型别名归一到标准 XSD——
+    注意 <code>float/decimal → xsd:decimal</code> 而不是 double（金融场景的取舍：decimal 精确、
+    double 是二进制浮点有误差），与第 9 章类型格的 double 并存不冲突——格管「合并拓宽」，
+    别名表管「拼写归一」。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-validation-loop">10.4 完整闭环：生成 → 序列化 → 真验证</h2>
+
+  <p>
+    把第 8、9、10 章串成一条可运行的治理闭环（假设你已装 <code>semantica[shacl]</code>）：
+  </p>
+
+  <pre><code>from semantica.ontology import (
+    OntologyGenerator, SHACLGenerator, OWLGenerator, run_shacl_validation)
+
+# ① 从 KG 字典生成本体（第 8-9 章；validate=False 跳过占位验证）
+ontology = OntologyGenerator(base_uri="https://myco.dev/ontology/") \
+    .generate_ontology(kg_dict, validate=False)
+
+# ② 从本体生成 SHACL shapes（本章）
+shacl = SHACLGenerator(
+    base_uri="https://myco.dev/shapes/",          # shapes 的家
+    target_namespace="https://myco.dev/ontology/", # 被检术语的家（#1104：必须分开）
+    quality_tier="strict",
+).generate(ontology)
+shacl_turtle = SHACLGenerator().serialize(shacl, format="turtle")
+
+# ③ 把数据图也序列化成 Turtle（第 2 章的 OWLGenerator/RDFExporter）
+data_turtle = OWLGenerator().generate_owl(ontology, format="turtle")
+
+# ④ 真验证（第 3 章的 run_shacl_validation —— pyshacl 路线）
+report = run_shacl_validation(data_turtle, shacl_turtle)
+print(report.summary())            # "Graph conforms…" 或违规计数
+print(report.conforms, report.violation_count, report.warning_count)
+for v in report.violations:
+    print(v.focus_node, v.result_path, v.constraint, v.explanation)</code></pre>
+
+  <p>
+    注意闭环的哲学：<strong>本体从数据长出来（8–9 章），shapes 从本体长出来（本章），
+    再回头检验数据（第 3 章的真验证器）</strong>。第一次跑通时数据大概率不合规——
+    这不是失败，是治理循环的起点：违规清单告诉你修数据还是修本体，修完再跑。
+    与第 4 章方法论的「用 CQ 验证 → 迭代」同构，只不过这里用的是 SHACL 报告。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SHACL 治理闭环">
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="30" y="80" width="170" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="115" y="108" text-anchor="middle" font-size="13" font-weight="700">KG 字典（数据）</text>
+      <text style="fill:var(--fg-dim)" x="115" y="128" text-anchor="middle" font-size="10">entities + relationships</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="260" y="80" width="170" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="345" y="108" text-anchor="middle" font-size="13" font-weight="700">本体（模式）</text>
+      <text style="fill:var(--fg-dim)" x="345" y="128" text-anchor="middle" font-size="10">OntologyGenerator 第 8-9 章</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="490" y="15" width="200" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="590" y="43" text-anchor="middle" font-size="13" font-weight="700">SHACL shapes</text>
+      <text style="fill:var(--fg-dim)" x="590" y="63" text-anchor="middle" font-size="10">SHACLGenerator（本章）</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="490" y="145" width="200" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="590" y="173" text-anchor="middle" font-size="13" font-weight="700">验证报告</text>
+      <text style="fill:var(--fg-dim)" x="590" y="193" text-anchor="middle" font-size="10">run_shacl_validation（第 3 章）</text>
+
+      <line style="stroke:var(--muted)" x1="200" y1="115" x2="258" y2="115" stroke-width="2"/><polygon style="fill:var(--muted)" points="258,115 250,111 250,119"/>
+      <line style="stroke:var(--muted)" x1="430" y1="95" x2="488" y2="55" stroke-width="2"/><polygon style="fill:var(--muted)" points="488,55 479,54 484,47"/>
+      <line style="stroke:var(--muted)" x1="585" y1="85" x2="585" y2="143" stroke-width="2"/><polygon style="fill:var(--muted)" points="585,143 581,135 589,135"/>
+      <line style="stroke:var(--muted)" x1="488" y1="180" x2="115" y2="180" stroke-width="2"/><polygon style="fill:var(--muted)" points="115,180 123,176 123,184"/>
+      <text style="fill:var(--fg-dim)" x="300" y="200" text-anchor="middle" font-size="10">违规清单 → 修数据或修本体 → 再跑（治理循环）</text>
+      <line style="stroke:var(--muted)" x1="115" y1="150" x2="115" y2="175" stroke-width="2"/>
+    </svg>
+    <figcaption>SHACL 治理闭环：数据长出本体，本体长出 shapes，shapes 检验数据——报告驱动下一轮修复。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">10.5 本章回顾</h2>
+  <ul>
+    <li><strong>SHACLGenerator</strong>（ontology_generator.py:794）内部六步：类索引 → NodeShape 生成 →
+        属性挂载 → 继承传播 → 质量档位 → 序列化；PropertyShape/NodeShape 字段即第 3 章的 SHACL 词汇。</li>
+    <li><strong>继承传播是物化不是推理</strong>：父类属性形状复制进子类，shapes 图自包含；
+        RDFS 类型上传 vs SHACL 无继承，两种解法一个需求。</li>
+    <li><strong>strict 档 = closed=True</strong>，但只关「至少有一个属性」的形状（空形状 closed 会误杀一切属性）。</li>
+    <li><strong>#1104</strong>：shapes 命名空间 ≠ 目标命名空间；指向自己的 shapes 匹配不到任何节点，
+        pySHACL 报 conforms=true——「没检查」和「全对」在报告上长得一样。
+        <strong>#1105</strong>：无 domain 属性默认不挂到所有形状——生成器不能替本体立法。</li>
+    <li><strong>完整闭环</strong>：KG → 本体 → shapes → pyshacl 验证 → 违规清单驱动修复。
+        第一次不合规是常态，不是失败。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>看到 conforms=true 就庆祝</strong>——先确认 shapes 圈住了数据（#1104 假合格）。</li>
+      <li><strong>把 base_uri 和 target_namespace 设成同一个</strong>——直接踩 #1104。</li>
+      <li><strong>打开 attach_domainless_properties 却不知后果</strong>——所有形状凭空多出约束，数据集体爆违规。</li>
+      <li><strong>对空形状开 closed</strong>——该类实例的一切属性都会违规，误杀全量数据。</li>
+      <li><strong>忘了 semantica[shacl] extra</strong>——run_shacl_validation 会 ImportError；
+          闭环第 ④ 步跑不起来。</li>
+      <li><strong>期望 SHACL 自动修复数据</strong>——它只报告；修复靠你或冲突解决策略（第 6 章）。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="10">
+    <h2>第 10 章测试</h2>
+
+    <div class="q" data-id="10-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 继承传播：把父类的 PropertyShape 复制（物化）到子类的 NodeShape 里。"
+         data-rationale="SHACL 默认不做继承，生成器用物化补上：Employee 的必填 name 复制进 Manager 的形状。与 RDFS 的「推理时类型上传」相对——物化让 shapes 图自包含，代价是层级变更后需重新生成。"
+         data-review="sec-inheritance-tier">
+      <div class="prompt"><span class="qnum">Q1.</span> Employee 类的形状声明了 name 必填（minCount 1）。Manager 是 Employee 的子类。SHACLGenerator 怎么让 Manager 的实例也被检查 name？</div>
+      <label class="opt"><input type="radio" name="q-10-1" value="a"> A. 什么都不用做，pyshacl 自动按 subClassOf 推理继承</label>
+      <label class="opt"><input type="radio" name="q-10-1" value="b"> B. _propagate_inheritance 把父类的属性形状复制到子类形状（物化）</label>
+      <label class="opt"><input type="radio" name="q-10-1" value="c"> C. 在数据图里给 Manager 实例补写 rdf:type Employee</label>
+      <label class="opt"><input type="radio" name="q-10-1" value="d"> D. 生成器禁止出现子类</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-2" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 所有「至少声明了一个属性」的形状设 closed=True；空形状不关（关了会拒绝该类实例的一切属性，误杀全量数据）。"
+         data-rationale="_apply_quality_tier（:1170-1175）的 if node_shape.property_shapes 防守。A 说反；B 是 standard 档行为；D 会误杀。三行代码三重考虑：默认开放、可选封闭、封闭只对有内容的形状。"
+         data-review="sec-inheritance-tier">
+      <div class="prompt"><span class="qnum">Q2.</span> quality_tier="strict" 具体做什么？</div>
+      <label class="opt"><input type="radio" name="q-10-2" value="a"> A. 把所有 severity 提到 Violation</label>
+      <label class="opt"><input type="radio" name="q-10-2" value="b"> B. 删除所有 Warning 级约束</label>
+      <label class="opt"><input type="radio" name="q-10-2" value="c"> C. 给至少有一个属性的形状设 closed=True（未声明属性即违规）</label>
+      <label class="opt"><input type="radio" name="q-10-2" value="d"> D. 给包括空形状在内的所有形状设 closed=True</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-3" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— shapes 的 targetClass 指向 shapes 自己的命名空间，数据里没人住那儿，匹配不到任何节点；pySHACL 对「没检查任何东西」报 conforms=true。"
+         data-rationale="#1104 教训：验证器不区分「全对」与「根本没检查」。所以 base_uri（shapes 的家）与 target_namespace（被检术语的家）刻意分离。tests/ontology/test_shacl_target_namespace.py 是回归纪念碑。"
+         data-review="sec-namespaces">
+      <div class="prompt"><span class="qnum">Q3.</span> #1104「假合格」陷阱的成因是？</div>
+      <label class="opt"><input type="radio" name="q-10-3" value="a"> A. pyshacl 版本 bug，conforms 字段反了</label>
+      <label class="opt"><input type="radio" name="q-10-3" value="b"> C. 数据图太大导致验证超时被跳过</label>
+      <label class="opt"><input type="radio" name="q-10-3" value="c"> C. shapes 圈住了错误的命名空间，没匹配到任何节点，而「没检查」的报告是 conforms=true</label>
+      <label class="opt"><input type="radio" name="q-10-3" value="d"> D. closed=True 的形状自动豁免违规</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-4" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 默认 False：挂到所有形状等于发明本体从未声明的约束，会让所有类的实例凭空多出约束集体爆违规。"
+         data-rationale="#1105：0.6.6 前的行为是挂到每个 NodeShape，等于生成器替本体立法。修复后参数保留但默认关。教训：生成器可以补默认值，不能造规则。"
+         data-review="sec-namespaces">
+      <div class="prompt"><span class="qnum">Q4.</span> 一个属性没有声明 domain。attach_domainless_properties 参数的默认行为是什么、为什么？</div>
+      <label class="opt"><input type="radio" name="q-10-4" value="a"> A. 默认 True：挂到每个 NodeShape 上更全面</label>
+      <label class="opt"><input type="radio" name="q-10-4" value="b"> B. 默认 False：挂到所有形状是无中生有的约束（#1105）</label>
+      <label class="opt"><input type="radio" name="q-10-4" value="c"> C. 默认丢弃该属性</label>
+      <label class="opt"><input type="radio" name="q-10-4" value="d"> D. 默认挂到 owl:Thing 的形状上</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-5" data-type="mcq" data-multiselect="true" data-correct='["a","c","e"]'
+         data-answer="A（datatype）、C（minCount/maxCount）、E（pattern）都是 PropertyShape 字段；B 的 SPARQL 查询不是 SHACL 约束（那是 pyshacl 的 sh:sparql 扩展，PropertyShape 未建模）；D 的 transitive 检查不是 SHACL 词汇。"
+         data-rationale="PropertyShape（:733-745）字段：path/name/description/datatype/class_/min_count/max_count/in_values/has_value/pattern/severity——与第 3 章理论词汇一一对应。"
+         data-review="sec-generator">
+      <div class="prompt"><span class="qnum">Q5.</span> 以下哪些是 Semantica 的 PropertyShape 支持的约束字段？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-10-5" value="a"> A. datatype（sh:datatype）</label>
+      <label class="opt"><input type="checkbox" name="q-10-5" value="b"> B. SPARQL 查询约束</label>
+      <label class="opt"><input type="checkbox" name="q-10-5" value="c"> C. min_count / max_count</label>
+      <label class="opt"><input type="checkbox" name="q-10-5" value="d"> D. 传递性检查</label>
+      <label class="opt"><input type="checkbox" name="q-10-5" value="e"> E. pattern（正则）</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-6" data-type="fill" data-accepted='["target_namespace","targetnamespace","target namespace"]'
+         data-answer="target_namespace（被检验术语所在的命名空间，与 base_uri 分离）。"
+         data-rationale="#1104：base_uri 是 shapes 资源的家，target_namespace 是被检术语的家。两者相同会导致 shapes 匹配不到数据、pySHACL 报假合格。"
+         data-review="sec-namespaces">
+      <div class="prompt"><span class="qnum">Q6.</span> 填空：SHACLGenerator 构造参数中，指定「被检验术语所在命名空间」（必须与 base_uri 分开）的是 ______。</div>
+      <input type="text" class="fill" placeholder="参数名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-7" data-type="fill" data-accepted='["test_shacl_target_namespace.py","tests/ontology/test_shacl_target_namespace.py"]'
+         data-answer="tests/ontology/test_shacl_target_namespace.py。"
+         data-rationale="#1104 的回归测试——「假合格」教训的纪念碑。读测试是理解一个修复最可靠的入口（第 13 章贡献地图会再回到 tests/ontology/）。"
+         data-review="sec-namespaces">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：#1104「假合格」教训对应的回归测试文件是 tests/ontology/______。</div>
+      <input type="text" class="fill" placeholder="文件名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-8" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— class_iris 与 property_iris 分开：属性与类同名合法，合一张表会把类的 IRI 静默错配给属性。"
+         data-rationale="SHACLGraph（:779-791）注释原文解释了这个设计。B 的 hasValue 与 in_values 是两个不同字段；C 的 severity 在两层都有；A 无此优化说明。"
+         data-review="sec-generator">
+      <div class="prompt"><span class="qnum">Q8.</span> SHACLGraph 为什么维护 class_iris 和 property_iris 两张独立的 IRI 映射？</div>
+      <label class="opt"><input type="radio" name="q-10-8" value="a"> A. 为了序列化速度</label>
+      <label class="opt"><input type="radio" name="q-10-8" value="b"> B. 因为 SHACL 不允许属性和类同名</label>
+      <label class="opt"><input type="radio" name="q-10-8" value="c"> C. 因为类需要 severity 而属性不需要</label>
+      <label class="opt"><input type="radio" name="q-10-8" value="d"> D. 属性与类同名合法，一张表会把类的 IRI 静默错配给同名属性</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-9" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— float/decimal 归一到 xsd:decimal（精确十进制），不是 xsd:double（二进制浮点有误差）——金融场景的取舍。"
+         data-rationale="_XSD_ALIASES（:807-815）的刻意选择。与第 9 章类型格的 xsd:double 不冲突：格管合并拓宽（数据侧），别名表管拼写归一（生成侧）。"
+         data-review="sec-namespaces">
+      <div class="prompt"><span class="qnum">Q9.</span> _XSD_ALIASES 把 "float" 映射到哪个 XSD 类型？这个选择反映了什么考量？</div>
+      <label class="opt"><input type="radio" name="q-10-9" value="a"> A. xsd:decimal——精确十进制，金融场景避免二进制浮点误差</label>
+      <label class="opt"><input type="radio" name="q-10-9" value="b"> B. xsd:double——与 Python float 对应</label>
+      <label class="opt"><input type="radio" name="q-10-9" value="c"> C. xsd:float——名字一致</label>
+      <label class="opt"><input type="radio" name="q-10-9" value="d"> D. xsd:string——统一兜底</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="10-10" data-type="short"
+         data-key-points='["SHACLGenerator 六步：类索引→NodeShape→属性挂载→继承传播→质量档位→序列化","继承传播=物化（父形状复制给子类）vs RDFS 推理上传，各有取舍","strict 档 closed=True 只对有属性的形状（空形状 closed 误杀一切属性）","#1104 假合格：shapes 圈错命名空间→匹配不到节点→conforms=true；#1105 无 domain 属性默认不挂（生成器不能替本体立法）","治理闭环：数据→本体→shapes→验证→违规清单驱动修复；首次不合规是常态"]'
+         data-answer="SHACLGenerator 内部六步：建类索引、生成 NodeShape、按 domain 挂 PropertyShape、继承传播（把父类属性形状物化复制给子类——SHACL 本身不继承，物化让 shapes 自包含）、质量档位（strict 对至少有一个属性的形状设 closed=True，空形状不关以免误杀一切属性）、序列化（Turtle/JSON-LD/N-Triples）。两大教训：#1104 shapes 命名空间若与目标命名空间相同，targetClass 匹配不到任何数据节点，pySHACL 报 conforms=true 的假合格——所以 base_uri 与 target_namespace 刻意分离；#1105 无 domain 的属性默认不挂到所有形状——那会发明本体从未声明的约束。治理闭环：KG→本体→shapes→run_shacl_validation（pyshacl）→违规清单→修数据或修本体→重跑；第一次不合规是常态。"
+         data-rationale="五个要点：六步流水线、物化继承、strict 语义、两个 issue 教训、闭环心态。SHACL 部分是整个 ontology 模块工程质量最高的地方，值得精读两遍。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：复述 SHACLGenerator 六步；解释「物化继承」与 RDFS 推理的区别；讲清 #1104 和 #1105 两个教训；描述完整治理闭环及对「首次不合规」的正确心态。</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="11-governance.html"><strong>治理与生态</strong></a>——
+    命名空间管理、版本化、模块化、associative class 与预置领域本体。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 8 章 — OntologyGenerator 六阶段流水线</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 8 章 · 第三部分：ontology 深潜</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="8">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 8 · 第三部分：semantica.ontology 深潜</div>
+    <h1>OntologyGenerator：六阶段流水线精读</h1>
+    <p class="lede">
+      主角登场。<code>semantica/ontology/ontology_generator.py</code> 是 ontology 模块的发动机
+      （也是最大的单文件），把第 6 章造出来的 KG 字典变成带类、属性、层级、IRI 的本体。
+      本章逐段读 <code>generate_ontology()</code>（第 116–224 行）及其四个阶段方法，
+      顺手揪出三处「文档口径不一」——包括那个号称 HermiT/Pellet 的第 6 阶段的真实身份。
+      类/属性推断的算法细节留给第 9 章，SHACL 生成本体留给第 10 章。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能复述流水线每一阶段的输入/输出形状与代码位置，画出数据变换图</li>
+      <li>能解释 Stage 1 对多种实体/关系输入形状的归一策略（dict / 对象 / 元组 / 批量列表）</li>
+      <li>能说出 Stage 3 给类和属性打 <code>@type</code> 与生成 IRI 的规则，以及 #1103 修复的教训</li>
+      <li>能准确描述 Stage 5 和 Stage 6 的真实执行状态（一个外包、一个是占位）</li>
+      <li>能独立使用 generate_ontology / generate_from_graph / optimize_ontology 完成一次生成</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-pipeline-overview">8.1 流水线全景：一口吃下 KG 字典</h2>
+
+  <pre><code>from semantica.ontology import OntologyGenerator
+
+gen = OntologyGenerator(base_uri="https://myco.dev/ontology/")
+ontology = gen.generate_ontology({
+    "entities":      [{"type": "Person", "name": "Alice"},
+                      {"type": "Organization", "name": "Acme"}],
+    "relationships": [{"source": "Alice", "target": "Acme", "type": "works_for"}],
+})
+# → {"uri", "name", "version", "classes": […], "properties": […],
+#    "imports": [], "metadata": {class_count, property_count, …}, "validation": {…}}</code></pre>
+
+  <p>
+    入口是 <code>generate_ontology()</code>（<code>ontology_generator.py:116</code>）。
+    注意返回的是<strong>本体字典</strong>——不是 Turtle 字符串（序列化是 Stage 5 的外包活，8.5 节说）。
+    主体流程一眼看完（154–218 行）：
+  </p>
+
+  <ol>
+    <li><code>_stage1_parse_semantic_network(data)</code> → 语义网络（concepts/entities/relationships）</li>
+    <li><code>_stage2_yaml_to_definition(sn)</code> → 类定义（调 ClassInferrer）</li>
+    <li><code>_stage3_definition_to_types(defs, entities, relationships)</code> → OWL 类型标注（调 PropertyGenerator）</li>
+    <li><code>_stage4_hierarchy_generation(typed)</code> → 组装完整本体（调 build_class_hierarchy）</li>
+    <li>Stage 5（TTL 生成）不在本方法内执行；Stage 6（验证）默认开，调 <code>validator.validate()</code></li>
+  </ol>
+
+  <p>
+    值得欣赏的工程细节：<strong>每阶段用 progress_tracker 上报进度、每阶段输出都是纯 dict</strong>——
+    可单测、可断点、可在任何一步接管。读大文件先读主流程方法的骨架，这个文件是好范本。
+  </p>
+
+  <div class="demo" data-demo="sixStages">
+    <div class="demo-title">动手试 — 六阶段步进器</div>
+    <p>逐阶段查看输入/输出形状与真实代码位置。特别注意 Stage 5 和 Stage 6 的「真实身份」。</p>
+    <label class="opt"><input type="radio" name="sixst" value="s1"> Stage 1 语义网络解析</label>
+    <label class="opt"><input type="radio" name="sixst" value="s2"> Stage 2 YAML→类定义</label>
+    <label class="opt"><input type="radio" name="sixst" value="s3"> Stage 3 定义→OWL 类型</label>
+    <label class="opt"><input type="radio" name="sixst" value="s4"> Stage 4 层级生成</label>
+    <label class="opt"><input type="radio" name="sixst" value="s5"> Stage 5 TTL 生成</label>
+    <label class="opt"><input type="radio" name="sixst" value="s6"> Stage 6 符号验证</label>
+    <div class="demo-output empty">选择一个阶段。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-stage1">8.2 Stage 1：语义网络解析——消灭输入形状的巴别塔</h2>
+
+  <p>
+    <code>_stage1_parse_semantic_network()</code>（241 行起）干的活和第 6 章摄取层惊人地相似：
+    <strong>在系统边界把混乱输入归一</strong>。因为它面对的上游五花八门——KG 字典（dict）、
+    NER 的 Entity 对象、老的元组格式、甚至批量嵌套列表。归一逻辑（255–302 行）：
+  </p>
+
+  <ul>
+    <li><code>dict</code> → 原样通过；</li>
+    <li>有 <code>label/text</code> 属性的 Entity 对象 → 转 dict（补 start_char/end_char/confidence/metadata）；</li>
+    <li><code>[text, label]</code> 二元组 → <code>{"name": text, "type": label}</code>；</li>
+    <li>列表的列表 → 递归拍平（283–298 行特判「批 NER 输出」）。</li>
+  </ul>
+
+  <p>
+    然后是本阶段的核心产物<strong>概念分组</strong>（304–310 行）：按 <code>entity type</code> 归桶——
+  </p>
+
+  <pre><code>concepts = {"Person":       {"instances": [alice, bob, …], "relationships": […]},
+            "Organization": {"instances": [acme, …],          "relationships": […]}}</code></pre>
+
+  <p>
+    关系归一同样宽容（313–354 行）：dict / <code>(subject, predicate, object)</code> 对象 / 三元组列表都收。
+    最有意思的是 363–378 行的<strong>端点类型回查</strong>：关系只写了 <code>source: "Alice"</code> 没写
+    <code>source_type</code> 时，拿名字回实体表找类型——找不到就默认 <code>"Entity"</code>。
+    这个兜底直接决定了第 9 章 domain/range 推断的上限：<strong>垃圾进，垃圾出在 Stage 1 就定了调</strong>。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-stage23">8.3 Stage 2–3：类定义 → OWL 类型标注</h2>
+
+  <p>
+    <strong>Stage 2</strong>（<code>_stage2_yaml_to_definition</code>，395 行）很薄：
+    调 <code>self.class_inferrer.infer_classes(entities)</code> 得到类定义列表
+    （<code>{"name", "label", …}</code>，算法第 9 章精读），附上 generated_at 和 concept_count 元数据。
+    名字里的 "YAML" 是历史遗物——docstring 与模块注释沿用了早期「概念 → YAML 定义文件」的设想，
+    现实现直接是内存 dict。这属于<strong>读名不读实</strong>会吃亏的典型。
+  </p>
+
+  <p>
+    <strong>Stage 3</strong>（<code>_stage3_definition_to_types</code>，421 行）做三件事：
+  </p>
+
+  <pre><code># 439-441：属性推断（第 9 章主角）
+properties = self.property_generator.infer_properties(
+    entities=entities, relationships=relationships, classes=classes)
+
+# 447-450：类打类型 + IRI
+for cls in classes:
+    cls["@type"] = "owl:Class"
+    if not cls.get("uri"):
+        cls["uri"] = self.namespace_manager.generate_class_iri(cls["name"])
+
+# 453-460：属性按宾语类型分流 + IRI
+for prop in properties:
+    prop["@type"] = "owl:ObjectProperty" if prop["type"] == "object" else "owl:DatatypeProperty"
+    if not prop.get("uri"):
+        prop["uri"] = self.namespace_manager.generate_property_iri(prop["name"])</code></pre>
+
+  <p>
+    第 2 章学的 OWL 属性三分在此落地：<code>prop["type"] == "object"</code>（宾语是资源）
+    → ObjectProperty，否则 DatatypeProperty。IRI 由 <code>NamespaceManager</code> 统一生成
+    （第 11 章精读其 base_uri + speaking-IRI 逻辑）。
+  </p>
+
+  <div class="box" style="border-left-color:var(--warn);">
+    <div class="box-title">源码里的 bug 化石：#1103 注释（443–446 行）</div>
+    <p style="margin:.3rem 0;">
+      447 行上方留着一段注释：<em>ClassInferrer 在没给 namespace manager 时会设
+      <code>"uri": None</code>，导致键存在、<code>not in</code> 守卫永不触发，
+      每个类都以「无 IRI」状态流到导出器（issue #1103）</em>。
+      修复方式就是你现在看到的 <code>if not cls.get("uri")</code>（falsy 判断替代键存在判断）。
+      教训两层：<strong>①</strong> <code>key in dict</code> 与 <code>dict.get(key)</code> 的真值语义差异是
+      Python 高频坑；<strong>②</strong> 流水线中「None 也是值」的字段会静默穿透多层——
+      越长的管道越要在边界校验。
+    </p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-stage4">8.4 Stage 4：层级生成与本体组装</h2>
+
+  <p>
+    <strong>Stage 4</strong>（<code>_stage4_hierarchy_generation</code>，468 行）先调
+    <code>class_inferrer.build_class_hierarchy(classes)</code> 给类列表装父子关系
+    （相似度推断 + 环检测，第 9 章展开），然后组装最终骨架：
+  </p>
+
+  <pre><code>ontology = {
+    "uri":      self.namespace_manager.get_base_uri(),   # 本体 IRI（版本在这里，第 4 章黄金法则）
+    "name":     options.get("name", "GeneratedOntology"),
+    "version":  self.namespace_manager.version,
+    "classes":  classes,       # 已带 @type / uri / subClassOf
+    "properties": properties,  # 已带 @type / uri / domain / range
+    "imports":  [],            # 预留：外部本体导入（ReuseManager 填）
+    "metadata": {class_count, property_count, generated_at, …},
+}</code></pre>
+
+  <p>
+    这个 dict 就是第 2 章读过的 <code>OWLGenerator.generate_owl(ontology)</code> 的输入形状——
+    流水线在两个类之间以 dict 交接，<code>OntologyGenerator</code> 负责「长出内容」，
+    <code>OWLGenerator</code> 负责「穿上 RDF 外衣」。职责切分干净。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-stage56">8.5 Stage 5 与 Stage 6：名字、现实与三份口径</h2>
+
+  <p>
+    <strong>Stage 5（TTL 生成）不在这个方法里发生。</strong>195 行只有一行注释：
+    <code># Stage 5: TTL Generation (handled by OWLGenerator)</code>。
+    要拿到 Turtle，你得自己再调一步：
+  </p>
+
+  <pre><code>from semantica.ontology import OWLGenerator
+turtle = OWLGenerator().generate_owl(ontology, format="turtle")</code></pre>
+
+  <p>
+    <strong>Stage 6（符号验证）默认执行，但验了个寂寞。</strong>197–211 行：
+    <code>if options.get("validate", True): validation_result = self.validator.validate(ontology)</code>，
+    结果写进 <code>ontology["validation"]</code>。而 <code>self.validator</code> 是谁？
+    第 3 章已经验过尸：<strong>占位版 OntologyValidator</strong>——hermit 参数没人用、
+    consistency/satisfiability 是恒 True 的默认值。所以返回体里的
+    <code>validation.consistent=True</code> 不是「检查通过」，是「没检查」。
+  </p>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 三份口径，一个真相</div>
+    <ul style="margin:.3rem 0;">
+      <li><code>ontology/__init__.py</code> 模块 docstring：「<strong>6-Stage Pipeline</strong>，
+          Stage 6 - Symbolic Validation: <strong>HermiT/Pellet reasoning</strong>」；</li>
+      <li><code>generate_ontology</code> 的 docstring（118 行）：「Executes the complete
+          <strong>5-stage</strong> pipeline」且列表只有 5 项；</li>
+      <li>同一方法的进度消息（158 行）：「Generating ontology using <strong>6-stage</strong> pipeline」。</li>
+    </ul>
+    <p style="margin:.3rem 0;">
+      同一个文件里 5 与 6 并存，模块级宣传语还点名了并未接入的 HermiT/Pellet。
+      作为 repo 专家，你的正确姿势：<strong>信代码不信注释，信注释不信宣传语</strong>；
+      给别人的建议是 <code>generate_ontology(data, validate=False)</code> 关掉占位验证，
+      需要真校验走 <code>run_shacl_validation()</code>（SHACL，第 10 章）。
+      顺带一提：这不是「烂 repo」的标志——快速演进的开源项目里文档漂移是常态，
+      能在代码里读到真相、并且知道去哪读，才是 repo 专家的核心竞争力。
+    </p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-using">8.6 使用姿势大全</h2>
+
+  <pre><code># ① 基本生成（validate 默认 True；建议显式 False，见 8.5）
+ontology = gen.generate_ontology(data, name="ContractOntology", validate=False)
+
+# ② 从 GraphBuilder 产物直接生成（别名，:226）
+ontology = gen.generate_from_graph(kg_dict, validate=False)
+
+# ③ 只要类 / 只要属性（分别直通 ClassInferrer / PropertyGenerator）
+classes    = gen.infer_classes(data)
+properties = gen.infer_properties(data, classes)
+
+# ④ 质量优化：OntologyOptimizer（:609）——去重类、合并冗余属性等结构整理
+ontology   = gen.optimize_ontology(ontology)
+
+# ⑤ 串联第 2 章的 OWLGenerator 拿 Turtle
+turtle     = OWLGenerator().generate_owl(ontology, format="turtle")</code></pre>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">8.7 本章回顾</h2>
+  <ul>
+    <li><code>generate_ontology()</code>（ontology_generator.py:116）：KG 字典 → 本体字典；
+        四个阶段方法各自纯函数式（dict 进 dict 出），progress_tracker 全程上报。</li>
+    <li><strong>Stage 1</strong>（:241）：输入归一（dict/对象/元组/批量）+ 按 entity type 分桶 concepts +
+        关系端点类型回查（找不到默认 Entity——推断质量的地基）。</li>
+    <li><strong>Stage 2</strong>（:395）：调 ClassInferrer 出类定义；"YAML" 是历史名，现实现是内存 dict。</li>
+    <li><strong>Stage 3</strong>（:421）：属性推断 + <code>@type</code> 三分标注（owl:Class /
+        ObjectProperty / DatatypeProperty）+ NamespaceManager 生成 IRI；
+        #1103 注释是「None 值穿透流水线」的 bug 化石。</li>
+    <li><strong>Stage 4</strong>（:468）：build_class_hierarchy 装父子关系，组装 uri/name/version/imports/metadata 骨架。</li>
+    <li><strong>Stage 5</strong> 不在流水线内（外包给 OWLGenerator）；<strong>Stage 6</strong> 调的是占位 validator——
+        5/6 阶段口径与 HermiT/Pellet 宣传均与实现不符。生产姿势：<code>validate=False</code> + SHACL。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>以为 generate_ontology 返回 Turtle</strong>——返回 dict；序列化要再调 OWLGenerator。</li>
+      <li><strong>看到 validation.consistent=True 就放心</strong>——占位实现的默认值，没有检查发生。</li>
+      <li><strong>指望 Stage 6 的 HermiT/Pellet</strong>——宣传语，未接入。</li>
+      <li><strong>喂进脏类型就指望好本体</strong>——Stage 1 的 "Entity" 兜底会把未识别类型的端点
+          全归成一桶，层级和 domain/range 全歪。上游规范化（第 6 章）不能省。</li>
+      <li><strong>忽略 optimize_ontology</strong>——推断出的本体常有冗余类/属性，导出前过一遍 Optimizer
+          是好习惯。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="8">
+    <h2>第 8 章测试</h2>
+
+    <div class="q" data-id="8-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 本体字典：{uri, name, version, classes, properties, imports, metadata}。"
+         data-rationale="Stage 5（TTL 序列化）不在 generate_ontology 内执行，外包给 OWLGenerator；方法本身返回结构化 dict（docstring 137-144 行明确）。把它当 KG 字典（A）混淆了输入输出。"
+         data-review="sec-pipeline-overview">
+      <div class="prompt"><span class="qnum">Q1.</span> <code>generate_ontology(data)</code> 的返回值是？</div>
+      <label class="opt"><input type="radio" name="q-8-1" value="a"> A. KG 字典 {"entities","relationships"}</label>
+      <label class="opt"><input type="radio" name="q-8-1" value="b"> B. 本体字典 {uri, name, version, classes, properties, imports, metadata}</label>
+      <label class="opt"><input type="radio" name="q-8-1" value="c"> C. Turtle 格式的字符串</label>
+      <label class="opt"><input type="radio" name="q-8-1" value="d"> D. rdflib Graph 对象</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-2" data-type="mcq" data-multiselect="true" data-correct='["a","b","d"]'
+         data-answer="A、B、D 都会被归一成 dict；C 错——纯字符串不会被接受（会被跳过）。"
+         data-rationale="Stage 1 的 process_entity（255-280 行）依次处理：dict 直通（A）、有 label/text 属性的 Entity 对象转 dict（B）、[text,label] 元组转 dict（D，含批量嵌套）。裸字符串不是合法形状。这是「系统边界归一」模式的教科书实现。"
+         data-review="sec-stage1">
+      <div class="prompt"><span class="qnum">Q2.</span> Stage 1 能接受并归一以下哪些实体输入形状？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-8-2" value="a"> A. <code>{"type": "Person", "name": "Alice"}</code> 字典</label>
+      <label class="opt"><input type="checkbox" name="q-8-2" value="b"> B. 带 label/text 属性的 NER Entity 对象</label>
+      <label class="opt"><input type="checkbox" name="q-8-2" value="c"> C. 纯字符串 "Alice"</label>
+      <label class="opt"><input type="checkbox" name="q-8-2" value="d"> D. <code>("Alice", "PERSON")</code> 元组</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-3" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 按名字回实体表查类型；查不到就默认 "Entity"。"
+         data-rationale="363-378 行的端点类型回查：关系常只带端点名字，Stage 1 拿名字去 entities 里找 type 填进 source_type/target_type；找不到的兜底是 "Entity"。这决定了下游 domain/range 推断的上限——未识别类型的端点会被归进同一桶。"
+         data-review="sec-stage1">
+      <div class="prompt"><span class="qnum">Q3.</span> 一条关系只写了 {"source": "Alice", "target": "Acme", "type": "works_for"}，没有端点类型。Stage 1 怎么办？</div>
+      <label class="opt"><input type="radio" name="q-8-3" value="a"> A. 抛异常，要求补全类型</label>
+      <label class="opt"><input type="radio" name="q-8-3" value="b"> B. 丢弃这条关系</label>
+      <label class="opt"><input type="radio" name="q-8-3" value="c"> C. 按名字回查实体表找类型；查不到默认 "Entity"</label>
+      <label class="opt"><input type="radio" name="q-8-3" value="d"> D. 推断为 Person→Organization</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-4" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— prop["type"]=="object"（宾语是资源）→ owl:ObjectProperty；否则 owl:DatatypeProperty。"
+         data-rationale="453-457 行按属性 type 字段分流，正是第 2 章「属性三分」的自动化落地。B/C/D 与代码不符。"
+         data-review="sec-stage23">
+      <div class="prompt"><span class="qnum">Q4.</span> Stage 3 给属性标 <code>@type</code> 的分流依据是？</div>
+      <label class="opt"><input type="radio" name="q-8-4" value="a"> A. 属性推断给出的 type 字段：object → owl:ObjectProperty，其余 → owl:DatatypeProperty</label>
+      <label class="opt"><input type="radio" name="q-8-4" value="b"> B. 按属性名是否以 has 开头</label>
+      <label class="opt"><input type="radio" name="q-8-4" value="c"> C. 全部标为 owl:ObjectProperty</label>
+      <label class="opt"><input type="radio" name="q-8-4" value="d"> D. 随机二选一</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-5" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— uri=None 时键已存在，`not in` 守卫失效，类以无 IRI 状态穿透到导出器；修复为 falsy 判断 `if not cls.get("uri")`。"
+         data-rationale="443-450 行注释记录的 #1103：ClassInferrer 在无 namespace manager 时设 "uri": None。「键存在」与「值为真」的语义差异 + 长流水线的静默穿透，是两层经典教训。"
+         data-review="sec-stage23">
+      <div class="prompt"><span class="qnum">Q5.</span> 源码注释里的 #1103 bug 是怎么发生的？</div>
+      <label class="opt"><input type="radio" name="q-8-5" value="a"> A. 类名包含非法字符导致 IRI 解析失败</label>
+      <label class="opt"><input type="radio" name="q-8-5" value="b"> B. rdflib 版本不兼容</label>
+      <label class="opt"><input type="radio" name="q-8-5" value="c"> C. 循环导入导致 NamespaceManager 初始化失败</label>
+      <label class="opt"><input type="radio" name="q-8-5" value="d"> D. uri=None 让 `not in` 守卫永不触发，类无 IRI 穿透到导出器；修复为 falsy 判断</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-6" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 它不在 generate_ontology 内执行；注释写明 handled by OWLGenerator，需自行调用 generate_owl。"
+         data-rationale="195 行仅一行注释。流水线返回 dict，Turtle 序列化是显式的后续动作（OWLGenerator.generate_owl(ontology, format="turtle")）。A/C/D 与代码不符。"
+         data-review="sec-stage56">
+      <div class="prompt"><span class="qnum">Q6.</span> 关于 Stage 5（TTL 生成），与源码一致的是？</div>
+      <label class="opt"><input type="radio" name="q-8-6" value="a"> A. 在流水线内自动完成并返回 Turtle</label>
+      <label class="opt"><input type="radio" name="q-8-6" value="b"> B. 不在流水线内；外包给 OWLGenerator，需要显式调用 generate_owl</label>
+      <label class="opt"><input type="radio" name="q-8-6" value="c"> C. 已在 0.6 版移除</label>
+      <label class="opt"><input type="radio" name="q-8-6" value="d"> D. 只支持 JSON-LD 输出</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-7" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 占位的 OntologyValidator：consistent/satisfiable 是默认值，没有真实检查。"
+         data-rationale="197-211 行调 self.validator.validate()，而 validator 是第 3 章验过尸的占位实现（hermit 参数未用、pass）。validation.consistent=True 的正确解读是「没检查」而非「通过」。模块 docstring 宣传的 HermiT/Petal 未接入。"
+         data-review="sec-stage56">
+      <div class="prompt"><span class="qnum">Q7.</span> 你调用 generate_ontology(data)（validate 默认开），返回的 validation.consistent=True 意味着什么？</div>
+      <label class="opt"><input type="radio" name="q-8-7" value="a"> A. HermiT 推理机确认本体一致</label>
+      <label class="opt"><input type="radio" name="q-8-7" value="b"> B. pyshacl 跑了 SHACL 校验且通过</label>
+      <label class="opt"><input type="radio" name="q-8-7" value="c"> C. 几乎什么都不意味：占位 validator 的默认值，没有真实检查发生</label>
+      <label class="opt"><input type="radio" name="q-8-7" value="d"> D. 至少说明类层级无环</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-8" data-type="fill" data-accepted='["validate=false","validate=False","false","validate=false + run_shacl_validation","validate=false，再用 run_shacl_validation"]'
+         data-answer="validate=False（需要真校验时另走 run_shacl_validation / pyshacl）。"
+         data-rationale="占位验证只会浪费时间并在结果里埋一个误导性的 consistent=True。SHACL 路线（run_shacl_validation，需 semantica[shacl]）才是可托付的校验。"
+         data-review="sec-stage56">
+      <div class="prompt"><span class="qnum">Q8.</span> 填空：生产环境调用 generate_ontology 时的推荐参数是 ______，以跳过占位验证。</div>
+      <input type="text" class="fill" placeholder="参数写法">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-9" data-type="fill" data-accepted='["generate_from_graph","generatefromgraph","generate_from_graph()"]'
+         data-answer="generate_from_graph(graph, **options)（:226，generate_ontology 的别名）。"
+         data-rationale="名字更贴近语义的别名：输入是 GraphBuilder 的 KG 字典，直接进同一条流水线。OntologyGenerator 与 GraphBuilder 因此无缝衔接。"
+         data-review="sec-using">
+      <div class="prompt"><span class="qnum">Q9.</span> 填空：想把 GraphBuilder 的输出直接喂给 OntologyGenerator，语义更明确的别名方法是 ______。</div>
+      <input type="text" class="fill" placeholder="方法名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="8-10" data-type="short"
+         data-key-points='["四阶段实际执行（解析/定义/类型/层级）+ 每阶段输入输出形状","Stage 1 归一多种输入形状 + 概念分桶 + 端点类型回查（Entity 兜底）","Stage 3 打 @type 三分 + NamespaceManager 生成 IRI（#1103 教训：None 穿透）","Stage 5 外包给 OWLGenerator；Stage 6 是占位 validator（consistent=True≠通过）","三份口径不一（docstring 5 段 / 进度 6 段 / 模块宣传 HermiT-Pellet）；生产姿势 validate=False + SHACL"]'
+         data-answer="generate_ontology 是四阶段实际执行的流水线：Stage 1 归一多种输入形状（dict/Entity 对象/元组/批量）并按类型分桶、端点类型回查（兜底 Entity）；Stage 2 调 ClassInferrer 出类定义；Stage 3 打 @type（owl:Class/ObjectProperty/DatatypeProperty 三分）并用 NamespaceManager 生成 IRI（#1103 教训：uri=None 会静默穿透流水线）；Stage 4 build_class_hierarchy + 组装 uri/name/version/imports/metadata 骨架。Stage 5（TTL）不在流水线内，外包给 OWLGenerator 显式调用；Stage 6 默认调占位 validator，consistent=True 只是默认值。同一文件存在 5/6 阶段两种口径，模块 docstring 宣传的 HermiT/Pellet 未接入。生产姿势：validate=False + run_shacl_validation 做真校验。"
+         data-rationale="五个要点：阶段与形状、Stage 1 归一、Stage 3 标注与 IRI、Stage 5/6 真实身份、口径不一致与生产姿势。最后一点是本章（也是本书）反复强调的「信代码不信宣传」素养。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：复述流水线每个阶段的输入/输出与真实执行状态；#1103 的教训是什么；面对「文档三份口径」你的工程判断是什么？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章钻进推断算法本身：<a href="09-inference.html"><strong>类与属性推断</strong></a>——
+    ClassInferrer 和 PropertyGenerator 的频率统计、阈值、环检测。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

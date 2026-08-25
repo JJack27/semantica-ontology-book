@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 6 章 — 端到端数据流</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 6 章 · 第二部分：repo 全景</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="6">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 6 · 第二部分：Semantica repo 全景</div>
+    <h1>端到端数据流：从 PDF 到 Turtle</h1>
+    <p class="lede">
+      上一章是地图，这一章是路书：我们跟着三份「真实」合同文档，
+      走完摄取 → 规范化 → 分块 → 抽取 → 冲突检测 → 去重 → 建图 → 导出的全程，
+      每一步都给出数据形状的变化和对应的真实 API。第一部分埋的两颗种子
+      （实体同一性、逻辑矛盾检测）会在质量关卡那节发芽；双时间态这个 Semantica 招牌能力，
+      本章讲透。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能复述数据在流水线每个节点上的形状（文档 → 分块 → 实体/关系 → KG 字典 → Turtle）</li>
+      <li>能说出 entity_aware 分块为什么对 GraphRAG 至关重要，以及抽取后端（ml/pattern/llm）的选择逻辑</li>
+      <li>能解释五类冲突（值/类型/关系/时间/逻辑）和三种仲裁策略（credibility_weighted / most_recent / voting）</li>
+      <li>能描述 blocking + 语义相似度的去重两步法，以及为什么合并必须保留 provenance</li>
+      <li>能解释双时间态（valid time vs recorded time）并手工判断「某查询日哪些事实可见」</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-story">6.1 故事线与全景图</h2>
+
+  <p>
+    设定：目录 <code>./contracts/</code> 里躺着三份文档——<code>acme_master_2024.pdf</code>（主协议）、
+    <code>acme_amendment.pdf</code>（修订案，估值变了）、<code>globex_intro.docx</code>（另一家公司的简介）。
+    目标：把它们变成一张带溯源的 KG，最后导出 Turtle。全程如下：
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="端到端数据流与各节点数据形状">
+      <text style="fill:var(--fg)" x="20" y="24" font-size="12" font-weight="700">① 摄取</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="20" y="34" width="150" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent-2)" x="95" y="58" text-anchor="middle" font-size="11" font-weight="700">FileIngestor</text>
+      <text style="fill:var(--fg-dim)" x="95" y="76" text-anchor="middle" font-size="9">PDF/DOCX → [{path,text,…}]</text>
+
+      <text style="fill:var(--fg)" x="195" y="24" font-size="12" font-weight="700">② 规范化</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="190" y="34" width="140" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent-2)" x="260" y="58" text-anchor="middle" font-size="11" font-weight="700">normalize</text>
+      <text style="fill:var(--fg-dim)" x="260" y="76" text-anchor="middle" font-size="9">Unicode/日期/数字 → 净文本</text>
+
+      <text style="fill:var(--fg)" x="350" y="24" font-size="12" font-weight="700">③ 分块</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="350" y="34" width="130" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent-2)" x="415" y="58" text-anchor="middle" font-size="11" font-weight="700">split</text>
+      <text style="fill:var(--fg-dim)" x="415" y="76" text-anchor="middle" font-size="9">entity_aware → chunks</text>
+
+      <text style="fill:var(--fg)" x="500" y="24" font-size="12" font-weight="700">④ 抽取</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="500" y="34" width="190" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent-2)" x="595" y="58" text-anchor="middle" font-size="11" font-weight="700">semantic_extract</text>
+      <text style="fill:var(--fg-dim)" x="595" y="76" text-anchor="middle" font-size="9">NER/关系/事件 → Entity/Relation</text>
+
+      <text style="fill:var(--fg)" x="20" y="124" font-size="12" font-weight="700">⑤ 冲突检测</text>
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="20" y="134" width="150" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--fail)" x="95" y="158" text-anchor="middle" font-size="11" font-weight="700">ConflictDetector</text>
+      <text style="fill:var(--fg-dim)" x="95" y="176" text-anchor="middle" font-size="9">估值打架 → Conflict( severity )</text>
+
+      <text style="fill:var(--fg)" x="195" y="124" font-size="12" font-weight="700">⑥ 去重</text>
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="190" y="134" width="140" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--fail)" x="260" y="158" text-anchor="middle" font-size="11" font-weight="700">DuplicateDetector</text>
+      <text style="fill:var(--fg-dim)" x="260" y="176" text-anchor="middle" font-size="9">Acme≈ACME → 合并组</text>
+
+      <text style="fill:var(--fg)" x="350" y="124" font-size="12" font-weight="700">⑦ 建图</text>
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="350" y="134" width="130" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--pass)" x="415" y="158" text-anchor="middle" font-size="11" font-weight="700">GraphBuilder</text>
+      <text style="fill:var(--fg-dim)" x="415" y="176" text-anchor="middle" font-size="9">→ KG 字典+双时间态</text>
+
+      <text style="fill:var(--fg)" x="500" y="124" font-size="12" font-weight="700">⑧/⑨ 智能与落地</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="500" y="134" width="190" height="56" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent)" x="595" y="158" text-anchor="middle" font-size="11" font-weight="700">ontology → export</text>
+      <text style="fill:var(--fg-dim)" x="595" y="176" text-anchor="middle" font-size="9">模式层推断 → kg_audit.ttl</text>
+
+      <line style="stroke:var(--muted)" x1="170" y1="62" x2="188" y2="62" stroke-width="2"/><polygon style="fill:var(--muted)" points="188,62 180,58 180,66"/>
+      <line style="stroke:var(--muted)" x1="330" y1="62" x2="348" y2="62" stroke-width="2"/><polygon style="fill:var(--muted)" points="348,62 340,58 340,66"/>
+      <line style="stroke:var(--muted)" x1="480" y1="62" x2="498" y2="62" stroke-width="2"/><polygon style="fill:var(--muted)" points="498,62 490,58 490,66"/>
+      <line style="stroke:var(--muted)" x1="595" y1="90" x2="260" y2="132" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <line style="stroke:var(--muted)" x1="330" y1="162" x2="348" y2="162" stroke-width="2"/><polygon style="fill:var(--muted)" points="348,162 340,158 340,166"/>
+      <line style="stroke:var(--muted)" x1="480" y1="162" x2="498" y2="162" stroke-width="2"/><polygon style="fill:var(--muted)" points="498,162 490,158 490,166"/>
+      <line style="stroke:var(--muted)" x1="95" y1="190" x2="188" y2="190" stroke-width="2" transform="translate(95,0)"/>
+
+      <text style="fill:var(--fg-dim)" x="360" y="240" text-anchor="middle" font-size="10">形状演变：文件 → 净文本 → 分块 → 实体/关系列表 → KG 字典 → RDF 三元组</text>
+      <text style="fill:var(--fg-dim)" x="360" y="262" text-anchor="middle" font-size="10">每一步都有 provenance 钩子：这个事实从哪个文件哪一页来（第 7 章展开）</text>
+    </svg>
+    <figcaption>端到端数据流。五个功能区的颜色与第 5 章版图一致；虚线表示抽取结果回流到质量关卡。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-ingest-normalize">6.2 摄取与规范化</h2>
+
+  <pre><code>from semantica.ingest import FileIngestor
+
+docs = FileIngestor().ingest_directory("./contracts/", recursive=True)
+# → [{path, text, metadata…}, …]   统一形状，后续阶段不再关心原始格式</code></pre>
+
+  <p>
+    摄取层的全部使命是<strong>消灭格式差异</strong>：PDF、DOCX、HTML、CSV、数据库表、网页、
+    Kafka 流、Databricks 表……进来是什么不要紧，出去一律是「带元数据的文本/记录列表」。
+    之后流水线每一段都只认这个形状。
+  </p>
+
+  <p>
+    规范化（<code>semantica.normalize</code>）处理「人类写法」造成的脏：<code>TextNormalizer</code>
+    清 Unicode/智能引号/HTML 标签；<code>EntityNormalizer</code> 做别名归一
+    （"ACME Corp." → 规范名 + 置信度）；<code>DateNormalizer</code> 解析「三周前」这类自然语言日期；
+    <code>NumberNormalizer</code> 把 "$1.25M USD" 变成 <code>1_250_000</code> + 币种。
+    别小看这一步——第 9 章你会看到，<strong>本体类推断的质量直接吃规范化的红利</strong>：
+    类型字段不归一，频率统计就是垃圾进垃圾出。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-split-extract">6.3 分块与抽取：为图而切，为图而抽</h2>
+
+  <p>
+    传统 RAG 分块按字数切，切完送去嵌入。Semantica 的分块（<code>semantica.split</code>）
+    多一个心眼：<strong>别把实体和关系切碎</strong>。<code>entity_aware</code> 方法先做 NER 再切块，
+    保证命名实体不跨块；<code>relation_aware</code> 保证 (主语,谓语,宾语) 三元组同块；
+    还有 <code>graph_based</code>（按中心性找社区边界）、<code>ontology_aware</code>（第 12 章展开）等十余种。
+    为什么值得：下游的 GraphRAG 检索以「实体所在块」为召回单元，实体被切断 = 关系证据被切断。
+  </p>
+
+  <pre><code>from semantica.split import TextSplitter
+from semantica.semantic_extract import NamedEntityRecognizer, RelationExtractor
+
+chunks = TextSplitter(method="entity_aware", chunk_size=1000).split(docs[0]["text"])
+
+ner  = NamedEntityRecognizer(confidence_threshold=0.7)     # 置信度阈值砍掉低质实体
+ents = ner.extract_entities(docs[0]["text"])
+# → [Entity(name="Acme Corp", type="ORG"), Entity(name="Alice Chen", type="PERSON"), …]
+
+rels = RelationExtractor(confidence_threshold=0.6, bidirectional=True).extract_relations(text, entities=ents)
+# → [Relation(subject="Alice Chen", predicate="ceo_of", object="Acme Corp"), …]</code></pre>
+
+  <p>
+    一个工程要点：抽取有三种后端——<code>ml</code>（本地模型，默认，无需 API key）、
+    <code>pattern</code>（规则/正则）、<code>llm</code>（经 LiteLLM 调各家大模型）。
+    <code>GraphBuilder.build()</code> 的文档字符串（<code>kg/graph_builder.py:422-462</code>）写得很清楚：
+    默认全走本地，「Raw-text extraction uses local extractors by default and needs no
+    provider or API key」——LLM 是可选项而非依赖项，呼应「确定性基础设施」的定位。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-quality-gates">6.4 两道质量关卡：冲突检测与去重</h2>
+
+  <p>
+    我们的示例数据正好各踩一关：<strong>主协议说 Acme 估值 1.0B，修订案说 1.2B</strong>（值冲突）；
+    <strong>一份文档写 Acme Corp，另一份写 ACME Corporation</strong>（同一实体两个写法）。
+    流水线在它们进图之前各设一道关卡。
+  </p>
+
+  <p><strong>第一关：冲突检测</strong>（<code>semantica.conflicts</code>）。五类冲突：</p>
+
+  <table>
+    <thead><tr><th>类型</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td><strong>值冲突</strong> value</td><td>估值 1.0B vs 1.2B（同一字段不同值）</td></tr>
+      <tr><td><strong>类型冲突</strong> type</td><td>一个来源说它是 Organization，另一个说是 Product</td></tr>
+      <tr><td><strong>关系冲突</strong> relationship</td><td>A 说 alice worksFor acme，B 说 worksFor globex</td></tr>
+      <tr><td><strong>时间冲突</strong> temporal</td><td>同一事实的时间窗互相打架</td></tr>
+      <tr><td><strong>逻辑冲突</strong> logical</td><td>违反互斥公理：同一人同时是 Manager 和 Intern（第 2 章 disjointWith 的工程化）</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code>from semantica.conflicts import ConflictDetector, ConflictResolver, SourceTracker
+
+conflicts = ConflictDetector().detect_conflicts(all_entities)
+# → [Conflict(entity="acme", field="valuation", values=["1.0B","1.2B"], severity="HIGH")]
+
+tracker = SourceTracker()
+tracker.register_source("master_2024.pdf", credibility_score=0.9)   # 主协议更权威
+tracker.register_source("amendment.pdf",  credibility_score=0.85)
+
+resolved = ConflictResolver().resolve_conflicts(conflicts, strategy="credibility_weighted")
+# 其他策略：most_recent（信最新的）、voting（多数票）</code></pre>
+
+  <p>
+    注意设计哲学：<strong>检测和仲裁分离</strong>。<code>ConflictDetector</code> 只报Conflict
+    （带 severity），裁决权在 <code>ConflictResolver</code> 的策略里，而策略需要的事实（谁更可信）
+    由 <code>SourceTracker</code> 的可信度分数提供。监管场景偏爱这种结构——裁决理由可查。
+  </p>
+
+  <p><strong>第二关：去重/实体解析</strong>（<code>semantica.deduplication</code>），第 1 章的 ACME 之问在这里落地：</p>
+
+  <pre><code>from semantica.deduplication import DuplicateDetector, EntityMerger
+
+detector = DuplicateDetector(similarity_threshold=0.75, use_clustering=True)
+groups   = detector.detect_duplicate_groups(entities)
+# → [DuplicateGroup(entities=["e1","e2","e3"], confidence=0.91, strategy="semantic+blocking")]
+
+merger   = EntityMerger(preserve_provenance=True)     # ← 关键开关
+merged   = merger.merge_duplicates(entities, strategy="keep_most_complete")
+history  = merger.get_merge_history()</code></pre>
+
+  <p>
+    两步法：<strong>blocking</strong> 先用廉价键（如域名、首字母桶）把 N×N 比较砍成近邻块
+    （CHANGELOG 记录过 63.6% 的候选生成提速），块内再算<strong>语义相似度</strong>（嵌入），
+    过阈值成组。<code>preserve_provenance=True</code> 必须开着：合并后的实体要记得
+    「我由 e1、e2、e3 合并而来，各自来自哪个文件」——否则下次审计就断了线索。
+    这就是「provenance-preserving merge」，README 反复强调的产品级细节。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-kg-build">6.5 GraphBuilder：组装知识图谱</h2>
+
+  <pre><code>from semantica.kg import GraphBuilder, BiTemporalFact
+
+kg = GraphBuilder(merge_entities=True, enable_temporal=True).build(docs)
+# → {"entities": […], "relationships": […], "metadata": {…}}</code></pre>
+
+  <p>
+    <code>build()</code>（<code>kg/graph_builder.py:422</code>）的输入非常宽容：原始文本、
+    预抽取的实体对象、或现成的 KG 字典都收；串文本进来时它会按 <code>extract</code>/<code>ner_method</code>
+    等选项自动过抽取层。<code>merge_entities=True</code> 挂上 <code>EntityResolver</code>
+    （别名表 + 相似度），<code>enable_temporal=True</code> 打开双时间态。
+    产物仍是 KG 字典——通用货币再次现身。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-temporal">6.6 双时间态：世界时间 vs 认知时间</h2>
+
+  <p>
+    单时间轴的图回答不了监管场景的典型问题：「2024 年 6 月 30 日，<strong>我们当时认为</strong>
+    Acme 的估值是多少？」和「2024 年 6 月 30 日，<strong>事实上</strong>估值是多少？」是两个问题。
+    Semantica 的 <code>BiTemporalFact</code>（<code>kg/temporal_model.py</code>）给每个事实两根轴：
+  </p>
+
+  <ul>
+    <li><strong>valid time</strong>（<code>valid_from / valid_until</code>）：事实在<strong>世界里</strong>为真的区间
+        ——合同 3 月 1 日生效、12 月 31 日到期；</li>
+    <li><strong>recorded time</strong>（<code>recorded_at</code>）：这个事实<strong>进入你的系统</strong>的时刻
+        ——估值 6 月就定了，但 9 月才录进图里。</li>
+  </ul>
+
+  <p>
+    查询时两个轴独立过滤：<code>state_at(date)</code>（<code>context_graph.py:3485</code>）回答
+    「date 那天（且只统计 date 前已知的事实）图长什么样」；<code>TemporalGraphQuery.query_time_range
+    (kg, query="valid_facts", start, end)</code> 回答「世界时间落在窗口内的事实」。
+    配套还有 <code>TemporalNormalizer</code>（「上个季度」→ 起止区间）和 README 特性表里的
+    Allen 区间代数（13 种区间关系）。对本体读者的意义：<strong>本体管「什么类型的事实」，
+    双时间态管「事实何时为真、何时可知」</strong>——第 11 章讲版本管理时这组概念会再次出现。
+  </p>
+
+  <div class="demo" data-demo="biTemporal">
+    <div class="demo-title">动手试 — 时间旅行查询</div>
+    <p>三条事实各有 valid 区间与 recorded_at。选一个查询日期，看 state_at 的返回里谁可见、谁不可见、为什么。</p>
+    <label class="opt"><input type="radio" name="btd" data-date="2024-04-01"> 2024-04-01（alice 刚入职）</label>
+    <label class="opt"><input type="radio" name="btd" data-date="2024-07-15"> 2024-07-15（估值已生效但未录入？）</label>
+    <label class="opt"><input type="radio" name="btd" data-date="2024-10-01"> 2024-10-01（估值已录入）</label>
+    <label class="opt"><input type="radio" name="btd" data-date="2025-06-01"> 2025-06-01（alice 已跳槽）</label>
+    <div class="demo-output empty">选择查询日期。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">6.7 本章回顾</h2>
+  <ul>
+    <li><strong>形状演变链</strong>：文件 → 净文本 → 分块 → 实体/关系列表 → KG 字典 → RDF 三元组；
+        摄取层的使命是消灭格式差异，规范化是抽取与推断质量的地基。</li>
+    <li><strong>分块为图服务</strong>：entity_aware / relation_aware 保证实体与三元组不被切断——GraphRAG 的召回单元。</li>
+    <li><strong>抽取三后端</strong>：ml（默认、本地、零依赖）/ pattern / llm（可选增强）——「确定性」定位的体现。</li>
+    <li><strong>两道质量关卡</strong>：冲突检测五类（值/类型/关系/时间/逻辑）+ 三仲裁策略（credibility_weighted /
+        most_recent / voting），检测与仲裁分离；去重两步法（blocking 砍比较量 + 语义相似度过阈值），
+        合并必须 <code>preserve_provenance=True</code>。</li>
+    <li><strong>双时间态</strong>：valid time（世界为真区间）× recorded time（进入系统时刻）两轴独立；
+        <code>state_at</code> / <code>query_time_range</code> 分别按两轴查询。</li>
+    <li><code>GraphBuilder.build()</code>（graph_builder.py:422）输入宽容（文本/对象/字典），输出永远是 KG 字典。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>跳过规范化直接抽取</strong>——类型/日期/数字不归一，第 9 章的类推断直接垃圾进垃圾出。</li>
+      <li><strong>把冲突仲裁交给默认策略不管</strong>——策略选择（credibility vs recency vs voting）
+          是业务决策，默认值不该替你做监管级决定。</li>
+      <li><strong>合并重复实体时丢 provenance</strong>——省下的存储换不回审计线索。</li>
+      <li><strong>把 valid time 和 recorded time 混为一谈</strong>——「当时事实上如何」和「当时我们以为什么」
+          是两个查询，双时间态的全部意义就在于此。</li>
+      <li><strong>按字数分块再建图</strong>——实体切断后关系抽取质量雪崩；建图场景永远优先 entity_aware。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="6">
+    <h2>第 6 章测试</h2>
+
+    <div class="q" data-id="6-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 摄取层把一切来源变成统一的「带元数据文本/记录列表」，后续阶段不再关心原始格式。"
+         data-rationale="这是管道设计的经典解耦：格式差异在入口处一次消灭（A 是其中一种格式不是目标形状；C/D 都是后续阶段的职责）。统一形状让 split/extract/ontology 每一段都可独立测试替换。"
+         data-review="sec-ingest-normalize">
+      <div class="prompt"><span class="qnum">Q1.</span> FileIngestor 这类摄取组件的核心使命是？</div>
+      <label class="opt"><input type="radio" name="q-6-1" value="a"> A. 把所有文件转成 PDF</label>
+      <label class="opt"><input type="radio" name="q-6-1" value="b"> B. 把 PDF/DOCX/数据库/网页等一切来源变成统一的「带元数据文本/记录」形状</label>
+      <label class="opt"><input type="radio" name="q-6-1" value="c"> C. 抽取实体和关系</label>
+      <label class="opt"><input type="radio" name="q-6-1" value="d"> D. 给每个事实打上溯源标记</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-2" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 命名实体不跨块边界：GraphRAG 的召回单元是「实体所在块」，实体切断 = 关系证据切断。"
+         data-rationale="A 的固定窗口正是要避免的；B 是 relation_aware 的职责；D 说反了。entity_aware 先 NER 再切块，是建图场景的默认选择。"
+         data-review="sec-split-extract">
+      <div class="prompt"><span class="qnum">Q2.</span> entity_aware 分块方法保证什么？为什么这对知识图谱构建重要？</div>
+      <label class="opt"><input type="radio" name="q-6-2" value="a"> A. 每块固定 1000 字符，整齐划一</label>
+      <label class="opt"><input type="radio" name="q-6-2" value="b"> B. (主,谓,宾) 三元组永远在同块</label>
+      <label class="opt"><input type="radio" name="q-6-2" value="c"> C. 命名实体不被切断；实体切断会让关系证据随块丢失</label>
+      <label class="opt"><input type="radio" name="q-6-2" value="d"> D. 块数最少，节省存储</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-3" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 默认 ml：本地抽取器，无需任何 provider 或 API key；llm 是可选增强。"
+         data-rationale="graph_builder.py:460-462 文档原话「Raw-text extraction uses local extractors by default and needs no provider or API key」。B 混淆（llm 恰恰需要）；C 顺序反了；D 无中生有。这是「确定性基础设施」定位的代码级证据。"
+         data-review="sec-split-extract">
+      <div class="prompt"><span class="qnum">Q3.</span> GraphBuilder 处理原始文本时，默认的抽取后端是什么、需要 API key 吗？</div>
+      <label class="opt"><input type="radio" name="q-6-3" value="a"> A. 本地 ml 抽取器；不需要 provider 或 API key</label>
+      <label class="opt"><input type="radio" name="q-6-3" value="b"> B. LLM 抽取，需要 OpenAI key</label>
+      <label class="opt"><input type="radio" name="q-6-3" value="c"> C. 必须先配置 LLM 才能抽取</label>
+      <label class="opt"><input type="radio" name="q-6-3" value="d"> D. 没有默认后端，必须显式指定</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-4" data-type="mcq" data-multiselect="true" data-correct='["a","c","e"]'
+         data-answer="A（值）、C（关系）、E（逻辑）属于五类冲突；B 的「分块大小」和 D 的「实体重名」不是 ConflictDetector 的冲突类型。"
+         data-rationale="五类：value / type / relationship / temporal / logical。同一人同时任职两家公司是关系冲突；违反互斥公理是逻辑冲突（第 2 章 disjointWith 的工程化落地）。分块是 split 层参数；重名实体走 deduplication。"
+         data-review="sec-quality-gates">
+      <div class="prompt"><span class="qnum">Q4.</span> 以下哪些会被 ConflictDetector 判为冲突？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-6-4" value="a"> A. 主协议写估值 1.0B、修订案写 1.2B</label>
+      <label class="opt"><input type="checkbox" name="q-6-4" value="b"> B. 两份文档的分块大小不一致</label>
+      <label class="opt"><input type="checkbox" name="q-6-4" value="c"> C. A 源说 alice worksFor acme，B 源说 alice worksFor globex</label>
+      <label class="opt"><input type="checkbox" name="q-6-4" value="d"> D. 两个不同实体恰好同名</label>
+      <label class="opt"><input type="checkbox" name="q-6-4" value="e"> E. 同一人同时是 Manager 和 Intern（违反互斥公理）</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-5" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— credibility_weighted：按 SourceTracker 登记的来源可信度加权裁决，主协议（0.9）胜出，且裁决理由可查。"
+         data-rationale="most_recent（A）信时间戳——但修订案不一定比主协议可信，且监管场景更在意权威性；voting（B）需要多来源投票，两源场景失效；全部丢弃（D）会丢信息。监管级选择：权威加权 + 冲突留痕。"
+         data-review="sec-quality-gates">
+      <div class="prompt"><span class="qnum">Q5.</span> 监管审计场景，主协议（可信度 0.9）与修订案（0.85）对估值说法不一。选哪个仲裁策略最合适？</div>
+      <label class="opt"><input type="radio" name="q-6-5" value="a"> A. most_recent：信最新的修订案</label>
+      <label class="opt"><input type="radio" name="q-6-5" value="b"> B. voting：多数票</label>
+      <label class="opt"><input type="radio" name="q-6-5" value="c"> C. credibility_weighted：按来源可信度加权</label>
+      <label class="opt"><input type="radio" name="q-6-5" value="d"> D. 全部丢弃，等人工处理</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-6" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— blocking：用廉价键把 N×N 比较切成小邻块，块内再算语义相似度。"
+         data-rationale="全量嵌入比较是 O(n²)，大图跑不动；blocking（如按域名/首字母分桶）先砍掉 99% 不可能对（CHANGELOG 记录候选生成提速 63.6%），块内再用嵌入相似度过阈值。A 的联合索引是数据库概念；C 是图数据库存储；D 顺序反了。"
+         data-review="sec-quality-gates">
+      <div class="prompt"><span class="qnum">Q6.</span> DuplicateDetector 处理十万级实体时避免 O(n²) 全量两两比较的关键技术是？</div>
+      <label class="opt"><input type="radio" name="q-6-6" value="a"> A. 给实体建联合索引</label>
+      <label class="opt"><input type="radio" name="q-6-6" value="b"> B. blocking：先按廉价键分桶，桶内再算语义相似度</label>
+      <label class="opt"><input type="radio" name="q-6-6" value="c"> C. 把实体全部导入 Neo4j</label>
+      <label class="opt"><input type="radio" name="q-6-6" value="d"> D. 先算相似度再分桶</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-7" data-type="fill" data-accepted='["preserve_provenance","preserve_provenance=true","preserve provenance","保留溯源"]'
+         data-answer="preserve_provenance=True。"
+         data-rationale="EntityMerger(preserve_provenance=True) 保证合并后的实体记得「由哪些实体、从哪些来源合并而来」，并留下 merge history——审计线索的生命线。"
+         data-review="sec-quality-gates">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：EntityMerger 合并重复实体时必须打开的关键参数是 ______，否则审计线索断裂。</div>
+      <input type="text" class="fill" placeholder="参数名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-8" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— 不可见：recorded_at（2024-09-01）晚于查询日（2024-07-15），当时系统还不知道。"
+         data-rationale="双时间轴独立过滤：valid time 上 6 月已生效（世界为真），但 recorded time 上 9 月才录入（系统未知）。state_at 查询要求两轴同时满足。这正是「当时事实上如何」≠「当时我们以为什么」的实例。"
+         data-review="sec-temporal">
+      <div class="prompt"><span class="qnum">Q8.</span> 估值事实：valid_from=2024-06-01，recorded_at=2024-09-01。查询 state_at("2024-07-15")，该事实可见吗？</div>
+      <label class="opt"><input type="radio" name="q-6-8" value="a"> A. 可见，因为世界时间上已生效</label>
+      <label class="opt"><input type="radio" name="q-6-8" value="b"> B. 可见，recorded_at 不影响查询</label>
+      <label class="opt"><input type="radio" name="q-6-8" value="c"> C. 不可见，因为 valid_from 晚于查询日</label>
+      <label class="opt"><input type="radio" name="q-6-8" value="d"> D. 不可见，因为 recorded_at 晚于查询日——当时系统还不知道这个事实</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-9" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— valid time：事实在世界中为真的区间（合同生效到到期）。"
+         data-rationale="BiTemporalFact 的 valid_from/valid_until 是世界时间轴（世界里为真），recorded_at 是认知时间轴（进入系统的时刻）。B/C 分别是另一根轴与时间戳，D 是查询时的语义（开放世界）不是双时间态组件。"
+         data-review="sec-temporal">
+      <div class="prompt"><span class="qnum">Q9.</span> 「合同 2024-03-01 生效、2025-01-01 到期」——这两个时间戳属于双时间态的哪根轴？</div>
+      <label class="opt"><input type="radio" name="q-6-9" value="a"> A. valid time（世界时间）</label>
+      <label class="opt"><input type="radio" name="q-6-9" value="b"> B. recorded time（认知时间）</label>
+      <label class="opt"><input type="radio" name="q-6-9" value="c"> C. transaction time（数据库时间戳）</label>
+      <label class="opt"><input type="radio" name="q-6-9" value="d"> D. 都不是，这是开放世界假设的一部分</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="6-10" data-type="short"
+         data-key-points='["形状演变链：文件→净文本→分块→实体/关系→KG字典→RDF，每步有明确产物","entity_aware/relation_aware 分块保住实体与三元组完整（GraphRAG 召回单元）","冲突五类（值/类型/关系/时间/逻辑）与三仲裁策略，检测与仲裁分离、裁决可查","去重两步法：blocking 砍比较量 + 语义相似度过阈值；合并保留 provenance","双时间态：valid（世界为真）× recorded（系统已知）两轴独立，state_at 同时过滤两轴"]'
+         data-answer="数据形状沿流水线演变：文件 →（ingest）统一文档列表 →（normalize）净文本 →（split，entity_aware 保实体不切断）分块 →（extract，ml/pattern/llm 后端）实体关系列表 →（conflicts 五类检测 + credibility/most_recent/voting 仲裁）→（dedup：blocking+语义相似度，preserve_provenance 合并）→（GraphBuilder）KG 字典（可含双时间态事实）→（export）RDF。双时间态给每个事实两根轴：valid time（世界里为真区间）与 recorded time（进入系统时刻），state_at 同时过滤两轴，能区分「当时事实上如何」与「当时我们以为什么」。"
+         data-rationale="五个要点：形状链、分块原则、冲突体系、去重方法、双时间态。这套数据流是第 8 章 OntologyGenerator 输入的直接上游。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：完整描述一批文档从目录到 Turtle 的数据形状演变；两道质量关卡各自怎么工作；双时间态的两根轴如何协同。</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="07-intelligence-layer.html"><strong>智能层四件套</strong></a>——
+    ontology · reasoning · provenance · decisions 如何把 KG 变成「增强 KG」。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  Dashboard / table-of-contents page —《Semantica × 本体专家之路》
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本体之路 · Semantica × 本体专家之路</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">◆ 本体之路 · SEMANTICA</span>
+  <span class="crumb">从 RDF 三元组到 56K 行的本体生成器</span>
+  <span class="spacer"></span>
+</div>
+
+<main class="toc">
+  <div class="toc-header">
+    <div class="logo">◆</div>
+    <h1>Semantica × 本体专家之路</h1>
+    <p class="subtitle">
+      一本为「双目标」锻造的中文书：<strong>成为 semantica repo 的专家</strong>，
+      同时<strong>成为本体（Ontology）领域的专家</strong>。第一部分从零讲本体工程
+      （RDF/OWL/SHACL/SKOS/方法论），第二部分建立 repo 全景（架构/数据流/智能层），
+      第三部分逐行精读 <code>semantica.ontology</code>（六阶段生成/推断算法/SHACL/治理生态），
+      第四部分落到动手贡献。全部内容对照真实源码写就——包括四处「文档说与代码做不一致」的诚实标注，
+      它们最后都变成了你的 PR 候选。
+    </p>
+  </div>
+
+  <div class="dashboard">
+    <div class="progress-label">
+      <span>你的进度</span>
+      <span><strong id="progress-passed">0 / 13</strong> 章 · <strong id="progress-pct">0%</strong></span>
+    </div>
+    <div class="progress-bar"><div id="overall-progress" style="width:0%"></div></div>
+    <p class="small" style="margin-top:.7rem; margin-bottom:0;">
+      进度保存在浏览器 <code>localStorage</code>，刷新不丢。每章末尾有测试；
+      <strong>≥ 80% = 学够了，可以前进</strong>（软门槛——不锁任何内容）。
+    </p>
+  </div>
+
+  <section class="kg" id="knowledge-graph">
+    <div class="kg-head">
+      <div>
+        <h2>知识图谱</h2>
+        <p>全书核心概念与它们的连接。<strong>进度视图</strong>只点亮你已通过章节里的概念；
+          <strong>全图视图</strong>展示完整图谱。点击节点看它在哪些章节的哪一节被讲授；
+          拖拽节点、滚轮缩放。</p>
+      </div>
+      <div class="kg-toggle" role="group" aria-label="切换图谱视图">
+        <button type="button" data-mode="progress">进度视图</button>
+        <button type="button" data-mode="full">全图视图</button>
+      </div>
+    </div>
+    <div class="kg-layout">
+      <div class="kg-stage"></div>
+      <aside class="kg-panel" aria-live="polite"></aside>
+    </div>
+    <div class="kg-legenda"></div>
+  </section>
+
+  <div class="chapter-grid"></div>
+
+  <div class="toc-footer">
+    由 <a href="https://github.com/your/repo">personal-book-forger</a> 技能锻造 ·
+    全部图解为内联 SVG，全部演示在浏览器本地运行 ·
+    知识图谱由 CDN 的 Cytoscape.js 渲染，离线时自动回退内置布局 ·
+    源码引用对应 semantica main 分支（2026-08-25）。
+  </div>
+</main>
+
+<script>
+window.BOOK_CONFIG = {
+  slug: "semantica-ontology-expert",
+  lang: "zh",
+  chapters: [
+    { n: 1, slug: "01-what-is-ontology" },
+    { n: 2, slug: "02-rdfs-owl" },
+    { n: 3, slug: "03-shacl-skos" },
+    { n: 4, slug: "04-ontology-engineering" },
+    { n: 5, slug: "05-architecture" },
+    { n: 6, slug: "06-dataflow" },
+    { n: 7, slug: "07-intelligence-layer" },
+    { n: 8, slug: "08-generator-pipeline" },
+    { n: 9, slug: "09-inference" },
+    { n: 10, slug: "10-shacl-validation" },
+    { n: 11, slug: "11-governance" },
+    { n: 12, slug: "12-platform" },
+    { n: 13, slug: "13-dev-contributing" }
+  ]
+};
+window.CHAPTER_DESCS = {
+  1: { title: "本体论：从哲学到知识工程",
+       desc: "什么是本体、RDF 三元组、IRI 与同一性、本体/表结构/KG 三分。" },
+  2: { title: "描述语言栈：RDFS 与 OWL",
+       desc: "RDFS 五谓语与推理、OWL 公理与属性三分、子语言权衡、序列化等价性。" },
+  3: { title: "SHACL 约束与 SKOS 词表",
+       desc: "Shapes 与违规四元组、推理 vs 校验分工；真实现与占位实现之辨。" },
+  4: { title: "本体工程方法论",
+       desc: "能力问题驱动、复用三决策、命名与粒度纪律、版本化黄金法则。" },
+  5: { title: "Semantica 架构全景与核心抽象",
+       desc: "九阶段流水线、27 子包地图、KG 字典与 ContextGraph 双脊柱、四入口。" },
+  6: { title: "端到端数据流：从 PDF 到 Turtle",
+       desc: "数据形状演变、entity_aware 分块、冲突/去重双关卡、双时间态时间旅行。" },
+  7: { title: "智能层四件套",
+       desc: "ontology/reasoning/provenance/decisions 各加一维；Rete 与已知局限。" },
+  8: { title: "OntologyGenerator 六阶段流水线",
+       desc: "逐段精读 generate_ontology；Stage 5/6 的真实身份与三份口径之辨。" },
+  9: { title: "类与属性推断",
+       desc: "频率门槛、拆词层级、DFS 环检测、domain/range 聚合、XSD 类型格。" },
+  10: { title: "SHACL 生成与验证",
+       desc: "SHACLGenerator 六步、物化继承、#1104 假合格与 #1105 无中生有。" },
+  11: { title: "治理与生态",
+       desc: "NamespaceManager、版本管理、领域模板、中间类模式、门面与 LLM 补位。" },
+  12: { title: "本体在平台中的位置",
+       desc: "反哺分块、平台词表、Turtle 注入修复（220fb10e）、Ontology Hub 工作流。" },
+  13: { title: "开发环境与贡献地图",
+       desc: "环境与测试地图、贡献流程、四个 PR 候选——从读者到提交者。" }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js" defer></script>
+<script src="assets/book.js" defer></script>
+<script src="assets/graph.js" defer></script>
+</body>
+</html>

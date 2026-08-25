@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 11 章 — 治理与生态</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 11 章 · 第三部分：ontology 深潜</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="11">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 11 · 第三部分：semantica.ontology 深潜</div>
+    <h1>治理与生态：命名空间、版本、模块与 N 元关系</h1>
+    <p class="lede">
+      前三章读完了「生成」的主干；本章收割周边生态——让本体成为<strong>可长期治理资产</strong>
+      的那一圈设施：<code>NamespaceManager</code>（IRI 铸币厂）、<code>change_management</code>
+      （版本管理）、<code>ModuleManager</code>/<code>DomainOntologies</code>（模块化与领域模板）、
+      <code>AssociativeClassBuilder</code>（N 元关系建模术）、<code>OntologyEngine</code>（统一门面）与
+      <code>LLMOntologyGenerator</code>（补上数据推断不了的公理）。第 4 章方法论的每一格，
+      在这里都能找到代码。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能用 NamespaceManager 生成 speaking IRI，并说清 base_uri / 版本 / 元素 IRI 三者的关系（第 4 章黄金法则的落地）</li>
+      <li>能用 VersionManager 创建版本、比较版本、生成 diff，并说明它为何住在 change_management 子包</li>
+      <li>能说出 DomainOntologies 的模板机制（get / create / register / list）和 ModuleManager 的用途</li>
+      <li>能用 AssociativeClassBuilder 把 N 元关系（三方合同 + 签署日期）建成中间类——OWL 的标准解法</li>
+      <li>能解释 OntologyEngine 门面的价值与 LLMOntologyGenerator 补位的位置（数据推不出的公理）</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-namespace">11.1 NamespaceManager：IRI 铸币厂</h2>
+
+  <p>
+    第 8 章 Stage 3 和第 10 章的 SHACL 都在调它。<code>NamespaceManager</code>
+    （<code>namespace_manager.py:42</code>）管三件事：<strong>铸 IRI、管前缀、管版本</strong>。
+  </p>
+
+  <pre><code>from semantica.ontology import NamespaceManager
+
+ns = NamespaceManager(base_uri="https://myco.dev/ontology/",
+                      version="1.2.0",
+                      use_speaking_iris=True)     # 默认 True：人可读的 IRI
+
+ns.generate_class_iri("Organization")     # → "https://myco.dev/ontology/Organization"
+ns.generate_property_iri("worksFor")      # → "https://myco.dev/ontology/worksFor"
+ns.register_namespace("risk", "https://myco.dev/risk#")   # 自定义前缀
+ns.get_base_uri()                         # 本体 IRI（版本信息住在这里）</code></pre>
+
+  <p>
+    关键设计是第 4 章「版本化黄金法则」的直接实现：<strong>base_uri 是本体（owl:Ontology 节点）的
+    IRI，版本挂在它身上；元素 IRI（类/属性）永远无版本</strong>——v2 发布后
+    <code>…/ontology/Organization</code> 不变，跨版本数据不断裂。`use_speaking_iris=True`
+    时类名直接嵌入 IRI（"会说话的 IRI"），代价是改名即换坐标——所以第 4 章的命名纪律
+    （NamingConventions）是它的前置守卫。标准命名空间（rdf/rdfs/owl/xsd/skos，第 2 章那张表）
+    在初始化时自动注册，导出 Turtle 时才有那些漂亮的 <code>@prefix</code> 行。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-versioning">11.2 change_management：本体的版本管理</h2>
+
+  <p>
+    <code>VersionManager</code>（<code>semantica/change_management/ontology_version_manager.py:60</code>，
+    第 5 章说过它从 ontology 搬家至此）围绕 <code>OntologyVersion</code>（:49）对象工作：
+  </p>
+
+  <pre><code>from semantica.change_management import VersionManager
+
+vm = VersionManager()
+vm.create_version(ontology, version="2.0.0",
+                  description="新增 SanctionedParty 类",
+                  backward_compatible=False)      # ← 破坏性变更声明
+
+diff   = vm.diff_ontologies(base_ontology, target_ontology)   # :299 结构级 diff
+report = vm.compare_versions("1.0.0", "2.0.0")                # :199 版本对比
+vm.list_versions()                                            # :401 版本谱系</code></pre>
+
+  <p>
+    三层能力：<strong>结构 diff</strong>（哪些类/属性新增、删除、修改）、
+    <strong>版本对比报告</strong>（兼容性影响）、<strong>多版本共存</strong>（版本隔离 + import 闭包）。
+    为什么值得独立子包？因为「本体的变更管理」和「本体的生成」生命周期不同：
+    生成是流水线一步，变更是治理流程——需要 change log（<code>change_log.py</code>）、
+    持久化（<code>version_storage.py</code>）这些独立演化的配套。模块边界跟着职责走，
+    这是第 13 章贡献地图的预演。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-modular">11.3 模块化与领域模板</h2>
+
+  <p>
+    大本体不该是一个巨石文件。<code>ModuleManager</code> / <code>OntologyModule</code>
+    支持把本体拆成模块（如 core + finance + risk），各自命名空间、组合导入；
+    配合第 4 章的 <code>ReuseManager</code>（复用外部本体）构成「本体工程的开源生态位」。
+  </p>
+
+  <p>
+    <code>DomainOntologies</code>（<code>domain_ontologies.py:39</code>）则提供<strong>预置领域模板</strong>——
+    常见领域（金融、医疗、法务等，<code>list_domains()</code> 可查）的起步本体：
+  </p>
+
+  <pre><code>from semantica.ontology import DomainOntologies
+
+dom = DomainOntologies()
+tpl = dom.get_domain_template("finance")     # 取模板（类/属性骨架）
+ont = dom.create_domain_ontology("finance")  # 基于模板实例化
+dom.register_domain_template("logistics", my_template)   # 注册自家模板</code></pre>
+
+  <p>
+    定位是「从零建本体的起跑线」：与其从空目录开始，不如从领域模板裁剪——
+    这正是第 4 章「优先复用」铁律的产品化。模板 + 方法论（CQ 驱动裁剪）+ 流水线
+    （数据推断补充实例侧证据）三者配合，而不是互相替代。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-associative">11.4 AssociativeClass：N 元关系的建模术</h2>
+
+  <p>
+    一个经典建模难题：合同 <em>C-001</em> 由 Acme、Globex <strong>两家</strong>共同签署，
+    签署日不同、各自角色不同。二元关系（subject-predicate-object）装不下——
+    一个谓语只有两个端点。<strong>N 元关系</strong>需要「中间类」模式：把关系本身升格为类。
+    <code>AssociativeClassBuilder</code>（<code>associative_class.py:74</code>）把它做成了 API：
+  </p>
+
+  <pre><code>from semantica.ontology import AssociativeClassBuilder
+
+builder = AssociativeClassBuilder()
+contract_party = builder.create_associative_class(
+    name="ContractParty",
+    participants=["Acme", "Globex"],
+    properties={"signed_on": "xsd:date", "role": "xsd:string"},  # 关系自己的属性
+)   # :130
+
+position = builder.create_position_class(         # :206  任职关系（人-职位-组织 三元）
+    person="Alice", organization="Acme", title="CTO")
+event = builder.create_temporal_association(      # :264  带时间窗的关联
+    entities=["Alice", "Acme"], valid_from="2024-03-01")</code></pre>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="N 元关系的中间类建模">
+      <text style="fill:var(--fg)" x="360" y="24" text-anchor="middle" font-size="13" font-weight="700">三方合同签署：二元边装不下 → 关系升格为中间类</text>
+
+      <text style="fill:var(--fail)" x="20" y="70" font-size="11" font-weight="700">✗ 二元建模（丢失信息）</text>
+      <circle style="fill:var(--surface-2);stroke:var(--fail)" cx="80" cy="120" r="28" stroke-width="2"/>
+      <text style="fill:var(--fg)" x="80" y="125" text-anchor="middle" font-size="10">Acme</text>
+      <circle style="fill:var(--surface-2);stroke:var(--fail)" cx="200" cy="120" r="28" stroke-width="2"/>
+      <text style="fill:var(--fg)" x="200" y="125" text-anchor="middle" font-size="10">Globex</text>
+      <line style="stroke:var(--fail)" x1="108" y1="120" x2="172" y2="120" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="140" y="108" text-anchor="middle" font-size="9">signs_with</text>
+      <text style="fill:var(--fg-dim)" x="105" y="175" font-size="9">日期/角色/C-001 挂哪儿？</text>
+
+      <text style="fill:var(--pass)" x="400" y="70" font-size="11" font-weight="700">✓ 中间类建模（AssociativeClass）</text>
+      <circle style="fill:var(--surface-2);stroke:var(--warn)" cx="420" cy="150" r="34" stroke-width="2.5"/>
+      <text style="fill:var(--warn)" x="420" y="146" text-anchor="middle" font-size="10" font-weight="700">Contract</text>
+      <text style="fill:var(--warn)" x="420" y="160" text-anchor="middle" font-size="10" font-weight="700">Involvement</text>
+      <text style="fill:var(--fg-dim)" x="420" y="205" text-anchor="middle" font-size="9">role="co_signer" signed_on=…</text>
+
+      <circle style="fill:var(--surface-2);stroke:var(--accent)" cx="560" cy="90" r="24" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="560" y="95" text-anchor="middle" font-size="10">Acme</text>
+      <circle style="fill:var(--surface-2);stroke:var(--accent)" cx="560" cy="190" r="24" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="560" y="195" text-anchor="middle" font-size="10">Globex</text>
+      <circle style="fill:var(--surface-2);stroke:var(--accent-2)" cx="680" cy="140" r="24" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="680" y="145" text-anchor="middle" font-size="10">C-001</text>
+
+      <line style="stroke:var(--muted)" x1="452" y1="135" x2="534" y2="98" stroke-width="2"/><polygon style="fill:var(--muted)" points="534,98 525,99 530,106"/>
+      <line style="stroke:var(--muted)" x1="452" y1="163" x2="534" y2="184" stroke-width="2"/><polygon style="fill:var(--muted)" points="534,184 525,180 527,189"/>
+      <line style="stroke:var(--muted)" x1="454" y1="150" x2="654" y2="142" stroke-width="2"/><polygon style="fill:var(--muted)" points="654,142 646,138 646,146"/>
+      <text style="fill:var(--fg-dim)" x="560" y="135" text-anchor="middle" font-size="9">每个参与者一条边，</text>
+      <text style="fill:var(--fg-dim)" x="560" y="148" text-anchor="middle" font-size="9">属性挂在中间类上</text>
+    </svg>
+    <figcaption>中间类（associative class）模式：关系升格为类，参与者各自连边，
+    日期/角色/金额挂在中间类属性上——OWL 处理 N 元关系的标准姿势。</figcaption>
+  </figure>
+
+  <p>
+    用第 1 章的话说：中间类把「边」变成了「节点」，于是边也能带属性、也能被查询、也能挂 provenance。
+    这个模式在 OWL 世界无处不在（PROV-O 的 Activity、第 6 章去重的 DuplicateGroup 本质都是它）。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-engine-llm">11.5 OntologyEngine 门面与 LLM 增强</h2>
+
+  <p>
+    <code>OntologyEngine</code>（<code>engine.py:16</code>）是统一的<strong>门面</strong>（facade）：
+    <code>from_data()</code>（数据推断路线）、<code>from_text()</code>（LLM 直接从文本起草）、
+    <code>infer_classes/infer_properties</code>、<code>create_alignment/get_alignments</code>
+    （跨本体对齐）、<code>to_shacl/export_shacl/validate_graph</code>——一条龙。
+    门面的价值：应用代码只认一个入口，内部组件（生成器/验证器/对齐器）可替换。
+  </p>
+
+  <p>
+    <code>LLMOntologyGenerator</code>（<code>llm_generator.py:9</code>）补的是第 9 章明确说过的空档：
+    <strong>数据频率能推出「有哪些类、谁连谁」，推不出领域公理</strong>——
+    「Manager 和 Intern 互斥」「parent 传递」这类知识不在数据的统计形状里，在领域专家的脑子里。
+    LLM 路线让这类公理有个人机协作的入口（起草 → 人审 → 入库）。
+    但注意定位：它是<strong>可选增强</strong>，与「确定性基础设施」的根基并行——
+    默认流水线零 LLM 依赖（第 6 章的抽取三后端同理），用不用 LLM 是你的架构决策。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">11.6 本章回顾</h2>
+  <ul>
+    <li><strong>NamespaceManager</strong>：铸 IRI（speaking IRI 默认开）、管前缀、管版本；
+        版本挂本体 IRI、元素 IRI 永远无版本（第 4 章黄金法则的实现）。</li>
+    <li><strong>VersionManager</strong>（change_management 子包）：create_version / compare_versions /
+        diff_ontologies / list_versions；diff + 兼容性声明 + 多版本共存。</li>
+    <li><strong>ModuleManager + DomainOntologies</strong>：模块化拆分 + 领域模板起步（get/create/register/list）；
+        与 ReuseManager 构成本体的「开源生态位」。</li>
+    <li><strong>AssociativeClassBuilder</strong>：N 元关系的中间类模式（create_associative_class /
+        create_position_class / create_temporal_association）——关系升格为节点，边就有了属性。</li>
+    <li><strong>OntologyEngine</strong> 门面统一入口；<strong>LLMOntologyGenerator</strong> 补数据推不出的公理
+        （可选增强，默认流水线零 LLM）。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>在元素 IRI 里塞版本号</strong>——NamespaceManager 的设计就是防这个；版本去本体 IRI。</li>
+      <li><strong>给 speaking IRI 起中文名/带空格的名</strong>——NamingConventions 与第 10 章
+          _mint_term_iri 的百分号编码都在补这个坑；起名要过规范。</li>
+      <li><strong>把 N 元关系硬塞成多个二元边</strong>——日期/角色没地方挂，数据完整性碎一地；
+          用中间类。</li>
+      <li><strong>忽视 backward_compatible 声明</strong>——破坏性变更不声明，下游版本对比报告就成了摆设。</li>
+      <li><strong>把 LLMOntologyGenerator 当默认生成器</strong>——它补公理的草稿，不是主流水线；
+          数据驱动的推断（第 9 章）才是根基。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="11">
+    <h2>第 11 章测试</h2>
+
+    <div class="q" data-id="11-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 版本挂在 base_uri（本体 owl:Ontology 节点的 IRI）上；元素 IRI 永远无版本。"
+         data-rationale="第 4 章黄金法则的实现：元素 IRI 是全球坐标，带版本会让 v1/v2 同名类变成不同实体、跨版本数据断裂。A 说反；C 是 rdfs:label 的用法（错误）；D 无中生有。"
+         data-review="sec-namespace">
+      <div class="prompt"><span class="qnum">Q1.</span> NamespaceManager 的版本化设计里，版本号放在哪？</div>
+      <label class="opt"><input type="radio" name="q-11-1" value="a"> A. 每个元素 IRI 的末尾，如 …/Organization/v2</label>
+      <label class="opt"><input type="radio" name="q-11-1" value="b"> B. 本体（base_uri）身上；元素 IRI 永远无版本</label>
+      <label class="opt"><input type="radio" name="q-11-1" value="c"> C. rdfs:label 里</label>
+      <label class="opt"><input type="radio" name="q-11-1" value="d"> D. 随机分配，与 IRI 无关</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-2" data-type="fill" data-accepted='["change_management","semantica.change_management","change_management（子包）"]'
+         data-answer="semantica.change_management（VersionManager 在 change_management/ontology_version_manager.py:60）。"
+         data-rationale="从 ontology 包迁出为独立子包：变更管理（change_log、version_storage、managers）与本体生成是不同生命周期的职责。import 路径：from semantica.change_management import VersionManager。"
+         data-review="sec-versioning">
+      <div class="prompt"><span class="qnum">Q2.</span> 填空：VersionManager 的正确导入路径是 from semantica.______ import VersionManager。</div>
+      <input type="text" class="fill" placeholder="子包名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-3" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— diff_ontologies(base, target)：结构级差异（哪些类/属性新增、删除、修改）。"
+         data-rationale="diff_ontologies（:299）是结构 diff；compare_versions（:199，B）是版本对比报告；create_version（A）建版本；list_versions（C）列谱系。版本治理三板斧：建版本 → diff → 对比报告。"
+         data-review="sec-versioning">
+      <div class="prompt"><span class="qnum">Q3.</span> 「2.0 相对 1.0 具体改了哪些类和属性？」——VersionManager 的哪个方法回答？</div>
+      <label class="opt"><input type="radio" name="q-11-3" value="a"> A. create_version</label>
+      <label class="opt"><input type="radio" name="q-11-3" value="b"> B. compare_versions（只给对比报告不给明细）</label>
+      <label class="opt"><input type="radio" name="q-11-3" value="c"> C. list_versions</label>
+      <label class="opt"><input type="radio" name="q-11-3" value="d"> D. diff_ontologies(base, target)</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-4" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 中间类（associative class）：关系升格为类，参与者各自连边，日期/角色挂在中间类属性上。"
+         data-rationale="N 元关系是二元三元组建模的经典难题；OWL 标准解法是 reification 成中间类。AssociativeClassBuilder.create_associative_class（:130）实现之。A 丢信息；B 会把「签署」误建为实体参与者的属性（两家公司各自的签署日期对不上）；D RDF 里空白节点不是给这个用的。"
+         data-review="sec-associative">
+      <div class="prompt"><span class="qnum">Q4.</span> 合同 C-001 由 Acme 与 Globex 共同签署，且两家签署日期与角色不同。正确的 OWL 建模方式是？</div>
+      <label class="opt"><input type="radio" name="q-11-4" value="a"> A. Acme signs_with Globex 一条二元边</label>
+      <label class="opt"><input type="radio" name="q-11-4" value="b"> B. 把日期设为 Acme 的属性</label>
+      <label class="opt"><input type="radio" name="q-11-4" value="c"> C. 建 ContractInvolvement 中间类，连向合同与两家公司，日期/角色挂在中间类上</label>
+      <label class="opt"><input type="radio" name="q-11-4" value="d"> D. 用空白节点随便连</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-5" data-type="mcq" data-multiselect="true" data-correct='["b","c","d"]'
+         data-answer="B（领域模板起步）、C（模块化拆分）、D（LLM 起草公理）都是生态供给；A 说反了——DomainOntologies 给的是模板不是完成品。"
+         data-rationale="生态三件套：DomainOntologies 模板（裁剪起步）、ModuleManager 模块化（大本体拆分）、LLMOntologyGenerator（数据推不出的公理人机协作起草）。完整能力仍然要 CQ 驱动 + 流水线补充。"
+         data-review="sec-modular">
+      <div class="prompt"><span class="qnum">Q5.</span> 关于本体的「生态供给」，以下说法正确的有？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-11-5" value="a"> A. DomainOntologies 直接交付可上线的完整领域本体，无需裁剪</label>
+      <label class="opt"><input type="checkbox" name="q-11-5" value="b"> B. DomainOntologies 提供领域模板作为建本体的起跑线</label>
+      <label class="opt"><input type="checkbox" name="q-11-5" value="c"> C. ModuleManager 支持把大本体拆成多模块（core + 领域模块）</label>
+      <label class="opt"><input type="checkbox" name="q-11-5" value="d"> D. LLMOntologyGenerator 用来起草数据统计推不出的领域公理</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-6" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 门面（facade）：应用只认一个入口，内部组件可替换。"
+         data-rationale="OntologyEngine（engine.py:16）聚合 from_data/from_text/infer_classes/create_alignment/to_shacl/validate_graph 等。B 恰好相反——它把多组件收敛成一个入口；C 默认零 LLM（from_text 才用）；D 它不承担治理流程（change_management 的事）。"
+         data-review="sec-engine-llm">
+      <div class="prompt"><span class="qnum">Q6.</span> OntologyEngine 的设计模式与价值是？</div>
+      <label class="opt"><input type="radio" name="q-11-6" value="a"> A. 门面：统一入口聚合生成/推断/对齐/SHACL/验证，内部组件可替换</label>
+      <label class="opt"><input type="radio" name="q-11-6" value="b"> B. 适配器：把 RDF 转成 LPG</label>
+      <label class="opt"><input type="radio" name="q-11-6" value="c"> C. 强制要求所有操作走 LLM</label>
+      <label class="opt"><input type="radio" name="q-11-6" value="d"> D. 它是版本管理的另一个名字</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-7" data-type="fill" data-accepted='["speaking iris","speaking iri","speaking_iris","会说话的 iri"]'
+         data-answer="use_speaking_iris（默认 True，生成人可读的 speaking IRI）。"
+         data-rationale="类名直接嵌入 IRI（…/ontology/Organization），代价是改名即换坐标——所以 NamingConventions 的命名纪律是前置守卫。"
+         data-review="sec-namespace">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：NamespaceManager 生成「人可读 IRI」（类名直接嵌入 IRI）的配置项是 use______。</div>
+      <input type="text" class="fill" placeholder="补全参数名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-8" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 数据统计推不出领域公理（互斥、传递性在专家脑子里），LLM 是这类知识的人机协作入口。"
+         data-rationale="第 9 章的推断是频率/聚合统计：类、属性、domain/range 都来自数据的形状；「Manager 与 Intern 互斥」不会出现在任何统计里。LLM 起草 → 人审 → 入库，补的正是这个空档。A/C 与事实相反；D 是 DomainOntologies 的职责。"
+         data-review="sec-engine-llm">
+      <div class="prompt"><span class="qnum">Q8.</span> LLMOntologyGenerator 在能力版图上补的空档是？</div>
+      <label class="opt"><input type="radio" name="q-11-8" value="a"> A. 替代频率统计做类推断（更快）</label>
+      <label class="opt"><input type="radio" name="q-11-8" value="b"> B. 起草数据统计推不出的领域公理（互斥/传递等专家知识）</label>
+      <label class="opt"><input type="radio" name="q-11-8" value="c"> C. 提供 SHACL 验证（替代 pyshacl）</label>
+      <label class="opt"><input type="radio" name="q-11-8" value="d"> D. 提供领域模板</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-9" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— create_temporal_association（:264）：带时间窗的关联建模。"
+         data-rationale="三个入口对应三种常见 N 元场景：create_associative_class（通用参与者+属性）、create_position_class（人-职位-组织任职三角）、create_temporal_association（带 valid_from 时间窗）——后者与第 6 章双时间态呼应。"
+         data-review="sec-associative">
+      <div class="prompt"><span class="qnum">Q9.</span> 要建模「Alice 于 2024-03-01 起任职 Acme」（关系带时间窗），AssociativeClassBuilder 的哪个方法最贴切？</div>
+      <label class="opt"><input type="radio" name="q-11-9" value="a"> A. create_associative_class</label>
+      <label class="opt"><input type="radio" name="q-11-9" value="b"> B. create_position_class</label>
+      <label class="opt"><input type="radio" name="q-11-9" value="c"> C. create_temporal_association</label>
+      <label class="opt"><input type="radio" name="q-11-9" value="d"> D. 不需要，直接 add_edge 带 valid_from</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="11-10" data-type="short"
+         data-key-points='["NamespaceManager：铸 IRI/管前缀/管版本；版本在本体 IRI，元素 IRI 无版本","VersionManager（change_management）：create/compare/diff/list；版本治理三板斧","ModuleManager 模块化 + DomainOntologies 领域模板 + ReuseManager 复用 = 生态位","AssociativeClass：N 元关系的中间类模式（关系升格为节点，边有了属性）","OntologyEngine 门面统一入口；LLMOntologyGenerator 补数据推不出的公理（可选增强）"]'
+         data-answer="治理设施全景：NamespaceManager 铸 IRI（speaking IRI 默认开）并实现版本化黄金法则（版本挂本体 IRI、元素 IRI 永远无版本）；change_management 的 VersionManager 提供建版本/对比/结构 diff/谱系（版本治理三板斧）；ModuleManager 模块化拆分、DomainOntologies 领域模板起步、ReuseManager 复用外部本体构成生态位；AssociativeClassBuilder 用中间类模式解 N 元关系（关系升格为节点，日期/角色挂在中间类上，create_temporal_association 还带时间窗）；OntologyEngine 是统一门面，LLMOntologyGenerator 补数据统计推不出的领域公理（可选增强，默认流水线零 LLM）。"
+         data-rationale="五个要点：命名空间、版本管理、模块生态、N 元关系、门面与 LLM 定位。这圈设施把「一次生成」变成「长期治理的资产」。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：治理生态有哪些设施、各管什么？N 元关系为什么需要中间类？LLM 生成器的定位边界在哪？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="12-platform.html"><strong>本体在平台中的位置</strong></a>——
+    ontology-aware 分块、RDF 导出的注入防护、Ontology Hub 界面与平台词汇表。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

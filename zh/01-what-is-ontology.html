@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 章 — 本体论：从哲学到知识工程</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 1 章 · 第一部分：领域基础</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="1">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 1 · 第一部分：本体领域基础</div>
+    <h1>本体论：从哲学到知识工程</h1>
+    <p class="lede">
+      摸底时你说「全都不懂」——很好，这是最诚实的起点。这一章从零开始：
+      什么是本体（ontology）、它和数据库表结构、知识图谱分别是什么关系、
+      以及 RDF 三元组这个「最小的知识原子」。读完这一章，你在摸底里没做出来的
+      三道题，应该全部能做对。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能用自己的话说出「本体」在知识工程中的定义，以及它从哲学概念演变而来的脉络</li>
+      <li>能把一句自然语言事实（如「Alice 在 Acme 担任 CTO」）拆解成 RDF 三元组，并写出对应的 Turtle 片段</li>
+      <li>能解释 IRI、字面量、空白节点各自的角色，以及为什么谓语必须用全局标识符</li>
+      <li>能说清「两个数据源里的 ACME Corporation 是不是同一家公司」这个问题在 RDF 世界里靠什么机制回答</li>
+      <li>能在具体场景里判断：该用数据库 schema、本体，还是知识图谱——以及它们如何叠在一起用</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-what-is-ontology">1.1 什么是本体：从「存在之谜」到「机器可读的世界观」</h2>
+
+  <p>
+    「本体论」（ontology，注意小写 o）原本是哲学的一个分支，研究的问题是
+    <strong>「什么东西存在，存在的都是什么类别」</strong>。亚里士多德在《形而上学》里讨论的
+    「实体与范畴」，就是在给世界做分类：物质、性质、数量、关系……哲学家们争论了两千多年
+    「什么是真实存在的」。
+  </p>
+
+  <p>
+    到了 1980–90 年代，人工智能研究者遇到了一个很实际的难题：要让两台机器（或两个软件系统）
+    交换关于世界的知识，光把数据传过去没用——还得让双方对「数据在说什么」达成一致。
+    于是哲学的 ontology 被借了过来，首字母大写成 <strong>Ontology（本体）</strong>，含义变成了一个
+    工程术语。学界最常用的定义来自 Studer 等人对 Gruber 定义的综合：
+  </p>
+
+  <div class="box" style="border-left-color:var(--accent);">
+    <div class="box-title">本体的经典定义</div>
+    <p style="margin:.3rem 0;">
+      「<strong>对某个概念化的显式的、形式化的规范</strong>」
+      （an explicit, formal specification of a conceptualization）。
+    </p>
+    <p style="margin:.3rem 0; color:var(--muted);">
+      拆开看：<em>概念化</em>（conceptualization）= 你心智模型里对世界的那套抽象（公司、人、雇佣关系）；
+      <em>显式</em>（explicit）= 白纸黑字写出来，不能靠意会；
+      <em>形式化</em>（formal）= 用机器能处理的严格语言写（不是散文）；
+      <em>规范</em>（specification）= 它是一份约定/规格，不是数据本身。
+    </p>
+  </div>
+
+  <p>
+    一个具体的本体回答的是这样一组问题：这个领域里<strong>有哪些类</strong>（Person、Organization、Contract）、
+    <strong>类之间什么关系</strong>（Manager 是 Employee 的子类）、<strong>有哪些属性</strong>
+    （worksFor、hasTitle、signedOn）、<strong>属性有什么规矩</strong>（worksFor 的主语必须是 Person、
+    宾语必须是 Organization；一个人同时最多任职几家公司……）。
+  </p>
+
+  <p>
+    为什么 AI 时代这件事突然重要了？因为 LLM 智能体恰恰缺这个。向量数据库存的是「相似性」，
+    不存「意义」：它知道「Acme 合同」和「Alice 的雇佣协议」这两段文本向量距离近，
+    却不知道 <em>Alice worksFor Acme</em>、<em>Acme partyTo 合同</em> 这样的结构化事实，更没法回答
+    「这份合同牵涉的公司的 CTO 是谁」。Semantica 这个 repo 存在的意义就是补上这一层——
+    它的 <code>semantica.ontology</code> 模块（本书第三部分的主角）能把杂乱数据自动生成本体，
+    让智能体的上下文从「一堆相似度」变成「一张有类型、有约束、可推理的图」。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="从现实世界到知识图谱的四层抽象">
+      <rect style="fill:var(--surface-2);stroke:var(--fg-dim)" x="60" y="16" width="600" height="54" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--fg)" x="360" y="40" text-anchor="middle" font-size="14" font-weight="700">现实世界</text>
+      <text style="fill:var(--fg-dim)" x="360" y="58" text-anchor="middle" font-size="11">Alice 真的在 Acme 上班 · 合同真的签了 · 世界本身不分类，分类是人做的</text>
+
+      <line style="stroke:var(--muted)" x1="360" y1="70" x2="360" y2="92" stroke-width="2"/>
+      <polygon style="fill:var(--muted)" points="360,92 356,84 364,84"/>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="60" y="94" width="600" height="54" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--accent-2)" x="360" y="118" text-anchor="middle" font-size="14" font-weight="700">概念化（心智模型）</text>
+      <text style="fill:var(--fg-dim)" x="360" y="136" text-anchor="middle" font-size="11">「有公司这种东西，有人这种东西，人可以任职于公司」——只存在于人的脑子里</text>
+
+      <line style="stroke:var(--muted)" x1="360" y1="148" x2="360" y2="170" stroke-width="2"/>
+      <polygon style="fill:var(--muted)" points="360,170 356,162 364,162"/>
+      <text style="fill:var(--warn)" x="500" y="163" text-anchor="middle" font-size="11">← 本体就是这一步：写成机器可读的规范</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="60" y="172" width="600" height="54" rx="8" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="360" y="196" text-anchor="middle" font-size="14" font-weight="700">本体（模式层 / schema 层）</text>
+      <text style="fill:var(--fg-dim)" x="360" y="214" text-anchor="middle" font-size="11">:Person · :Organization · :worksFor（domain=Person, range=Organization）· 公理与约束</text>
+
+      <line style="stroke:var(--muted)" x1="360" y1="226" x2="360" y2="248" stroke-width="2"/>
+      <polygon style="fill:var(--muted)" points="360,248 356,240 364,240"/>
+
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="60" y="250" width="600" height="42" rx="8" stroke-width="1.5"/>
+      <text style="fill:var(--pass)" x="360" y="268" text-anchor="middle" font-size="13" font-weight="700">实例数据（数据层）= 知识图谱</text>
+      <text style="fill:var(--fg-dim)" x="360" y="284" text-anchor="middle" font-size="11">alice worksFor acme · bob worksFor acme · contract_001 partyTo acme</text>
+    </svg>
+    <figcaption>本体在抽象链条中的位置：它把人脑中的概念化固化为机器可读的规范（模式层）；
+    遵循本体的实例数据（数据层）构成了知识图谱。「本体 = 模式，KG = 数据」是一个有用的第一近似。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-triple-model">1.2 RDF 三元组：最小的知识原子</h2>
+
+  <p>
+    本体要用「形式化的语言」写，这个语言家族的地基叫 <strong>RDF（Resource Description
+    Framework，资源描述框架）</strong>，是 W3C 在 1999 年标准化的。RDF 的全部核心只有一个想法，
+    小得惊人：
+  </p>
+
+  <div class="box" style="border-left-color:var(--accent);">
+    <div class="box-title">RDF 的唯一核心思想</div>
+    <p style="margin:.3rem 0;">
+      一切知识都表示成<strong>三元组</strong>（triple）：
+      <code style="color:var(--accent);">主语</code>（subject）—
+      <code style="color:var(--warn);">谓语</code>（predicate）—
+      <code style="color:var(--pass);">宾语</code>（object）。
+      主语是一个资源（thing），谓语是它和宾语之间的关系或属性，宾语是另一个资源或者一个字面值。
+      一条三元组 = 一句「主-谓-宾」的原子陈述。
+    </p>
+  </div>
+
+  <p>
+    「Alice 在 Acme Corp 担任 CTO」用三元组写出来就是两条：
+  </p>
+
+  <pre><code>主语        谓语         宾语
+─────────────────────────────────────────────────
+ex:alice    ex:worksFor  ex:acme          ← alice 任职于 acme（宾语是资源）
+ex:alice    ex:hasTitle  "CTO"            ← alice 的头衔是 "CTO"（宾语是字面量）</code></pre>
+
+  <p>
+    这里 <code>ex:</code> 是<strong>命名空间前缀</strong>（下一节细讲），它把 <code>alice</code>
+    展开成一个全局唯一的标识符。先别管细节，抓住两个要点：
+  </p>
+  <ul>
+    <li><strong>宾语分两种</strong>：指向另一个<strong>资源</strong>（另一条三元组的主语候选，如
+        <code>ex:acme</code>），或者是一个<strong>字面量</strong>（literal，字符串、数字、日期，如
+        <code>"CTO"</code>）。字面量是「死胡同」——没有东西能再从它出发指向别处。</li>
+    <li><strong>谓语不是字符串</strong>，它也是一个标识符（准确说一定是 IRI）。这一点是 RDF 和
+        JSON 字段名最本质的区别，1.3 节展开。</li>
+  </ul>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="两条三元组拼成一张小图">
+      <!-- alice node -->
+      <circle style="fill:var(--surface-2);stroke:var(--accent)" cx="150" cy="80" r="34" stroke-width="2.5"/>
+      <text style="fill:var(--accent)" x="150" y="85" text-anchor="middle" font-size="14" font-weight="700">ex:alice</text>
+      <text style="fill:var(--fg-dim)" x="150" y="128" text-anchor="middle" font-size="10">资源（IRI）</text>
+
+      <!-- acme node -->
+      <circle style="fill:var(--surface-2);stroke:var(--accent)" cx="470" cy="80" r="34" stroke-width="2.5"/>
+      <text style="fill:var(--accent)" x="470" y="85" text-anchor="middle" font-size="14" font-weight="700">ex:acme</text>
+      <text style="fill:var(--fg-dim)" x="470" y="128" text-anchor="middle" font-size="10">资源（IRI）</text>
+
+      <!-- worksFor edge -->
+      <line style="stroke:var(--warn)" x1="184" y1="80" x2="436" y2="80" stroke-width="2"/>
+      <polygon style="fill:var(--warn)" points="436,80 428,76 428,84"/>
+      <rect style="fill:var(--surface);stroke:var(--warn)" x="255" y="58" width="110" height="22" rx="6" stroke-width="1"/>
+      <text style="fill:var(--warn)" x="310" y="73" text-anchor="middle" font-size="12" font-weight="700">ex:worksFor</text>
+      <text style="fill:var(--fg-dim)" x="310" y="44" text-anchor="middle" font-size="10">谓语也是 IRI（资源）</text>
+
+      <!-- literal leaf -->
+      <polygon style="fill:var(--surface-2);stroke:var(--pass)" points="150,190 260,164 360,190 260,216" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="260" y="195" text-anchor="middle" font-size="13" font-weight="700">"CTO"</text>
+      <line style="stroke:var(--warn)" x1="150" y1="112" x2="205" y2="164" stroke-width="2"/>
+      <polygon style="fill:var(--warn)" points="205,164 197,160 202,153"/>
+      <rect style="fill:var(--surface);stroke:var(--warn)" x="118" y="140" width="92" height="22" rx="6" stroke-width="1"/>
+      <text style="fill:var(--warn)" x="164" y="155" text-anchor="middle" font-size="12" font-weight="700">ex:hasTitle</text>
+      <text style="fill:var(--fg-dim)" x="360" y="195" text-anchor="start" font-size="10">字面量 = 图的叶子，不能有出边</text>
+
+      <!-- triple annotation -->
+      <text style="fill:var(--fg-dim)" x="580" y="170" text-anchor="middle" font-size="11">ex:alice  ex:worksFor  ex:acme .</text>
+      <text style="fill:var(--fg-dim)" x="580" y="188" text-anchor="middle" font-size="11">ex:alice  ex:hasTitle  "CTO" .</text>
+    </svg>
+    <figcaption>三元组天生就是图：主语和宾语（资源）是节点，谓语是带标签的有向边。
+    多条三元组通过共享节点缝合在一起——这就是「知识图谱」这个词的字面来源。</figcaption>
+  </figure>
+
+  <p>
+    三元组的标准文本写法叫 <strong>Turtle</strong>（.ttl 文件），也是 Semantica 导出本体和 KG 的默认格式
+    （<code>semantica.export.RDFExporter</code> 输出的就是它）。上面那两条三元组的 Turtle 写法：
+  </p>
+
+  <pre><code>@prefix ex: &lt;https://example.org/&gt; .        # 声明前缀 ex 指向这个命名空间
+
+ex:alice  ex:worksFor  ex:acme ;           # 分号 = 同一个主语，下一条谓语宾语
+          ex:hasTitle  "CTO" .              # 句点 = 这组陈述结束</code></pre>
+
+  <p>
+    注意 Turtle 里 <code>ex:alice</code> 这种写法是缩写，完整形式是尖括号包住整个 IRI：
+    <code>&lt;https://example.org/alice&gt;</code>。分号让你复用主语，逗号复用主语和谓语——
+    这只是语法糖，解析之后每条都是独立的三元组。
+  </p>
+
+  <div class="demo" data-demo="tripleBuilder">
+    <div class="demo-title">动手试 — 三元组如何拼成图</div>
+    <p>勾选任意几条事实（每条都是一个三元组），然后点「构建图谱」，看 Turtle 和图的统计如何变化。
+       特别注意：勾选多条含 <code>alice</code> 的事实时，图里只有一个 alice 节点。</p>
+    <label class="opt"><input type="checkbox" data-triple='{"s":"ex:alice","p":"ex:worksFor","o":"ex:acme","oType":"iri"}'> alice 任职于 acme（宾语是资源）</label>
+    <label class="opt"><input type="checkbox" data-triple='{"s":"ex:alice","p":"ex:hasTitle","o":"CTO","oType":"literal"}'> alice 的头衔是 "CTO"（宾语是字面量）</label>
+    <label class="opt"><input type="checkbox" data-triple='{"s":"ex:bob","p":"ex:worksFor","o":"ex:acme","oType":"iri"}'> bob 也任职于 acme</label>
+    <label class="opt"><input type="checkbox" data-triple='{"s":"ex:acme","p":"ex:industry","o":"SaaS","oType":"literal"}'> acme 的行业是 "SaaS"</label>
+    <label class="opt"><input type="checkbox" data-triple='{"s":"ex:carol","p":"ex:worksFor","o":"ex:globex","oType":"iri"}'> carol 任职于 globex（另一个公司）</label>
+    <button data-run>构建图谱</button>
+    <div class="demo-output empty">勾选事实后点击按钮。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-iri-literal">1.3 IRI、字面量与空白节点：标识符为什么是一切的基础</h2>
+
+  <p>
+    摸底第一题的四个选项，差别全在一个问题上：<strong>用什么标识「Alice」「worksFor」「Acme」这些东西</strong>。
+    RDF 的答案分三种成分：
+  </p>
+
+  <ul>
+    <li>
+      <strong style="color:var(--accent);">IRI</strong>（Internationalized Resource Identifier，国际化的资源标识符）——
+      形如 <code>https://example.org/alice</code> 的全局唯一名字。<strong>主语和谓语必须是 IRI；
+      宾语可以是 IRI 也可以是字面量。</strong>
+    </li>
+    <li>
+      <strong style="color:var(--pass);">字面量</strong>（literal）——带类型的值：<code>"CTO"</code>、
+      <code>"250000"^^xsd:integer</code>、<code>"2024-01-15"^^xsd:date</code>。只能当宾语。
+    </li>
+    <li>
+      <strong style="color:#a78bfa;">空白节点</strong>（blank node，写作 <code>_:b1</code>）——
+      「有个东西但我暂时不想/没法给它起全局名字」。只能在一个文档范围内使用，细节本章先不展开，
+      你只要知道它是第三种成分。
+    </li>
+  </ul>
+
+  <p>
+    为什么谓语不能用 <code>"works_for"</code> 这种普通字符串？设想两个团队各自导出一份数据：
+  </p>
+
+  <pre><code>团队 A：("alice", "works_for", "acme")           # 字符串谓语
+团队 B：("alice_chen", "works_for", "acme_corp")   # 也是字符串谓语</code></pre>
+
+  <p>
+    两份数据放在一起，机器看到两个一模一样的 <code>"works_for"</code>，但<strong>没有任何依据</strong>判断
+    它们是不是同一个意思——A 的 works_for 可能指「现任职」，B 的可能指「曾任职」。字符串只有字形，
+    没有归属。而 IRI 是全局唯一的：
+  </p>
+
+  <pre><code>团队 A：ex:alice   &lt;https://schema.org/worksFor&gt;  ex:acme
+团队 B：ex:alice   &lt;https://schema.org/worksFor&gt;  ex:acme   ← 同一个 IRI = 同一个含义</code></pre>
+
+  <p>
+    只要两个团队都引用 <code>https://schema.org/worksFor</code>（Schema.org 是一个公开的通用词表），
+    机器就能确定：这是<strong>同一个谓语</strong>，两份数据可以无缝拼接。这就是摸底第一题选 B 的原因——
+    三个成分都是 IRI（宾语也可以是字面量），谓语尤其必须是 IRI，否则跨数据集互通无从谈起。
+    「IRI 是全球坐标，字面量是本地便签」——记住这句话。
+  </p>
+
+  <p>
+    为了可读性，RDF 用<strong>命名空间前缀</strong>缩写 IRI。社区沉淀了一批约定俗成的公共命名空间，
+    你在本书和 Semantica 源码里会反复见到：
+  </p>
+
+  <table>
+    <thead><tr><th>前缀</th><th>命名空间</th><th>管什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>rdf:</code></td><td>http://www.w3.org/1999/02/22-rdf-syntax-ns#</td><td>RDF 自身的基础词汇（rdf:type 等）</td></tr>
+      <tr><td><code>rdfs:</code></td><td>http://www.w3.org/2000/01/rdf-schema#</td><td>类层级与属性标注语言（第 2 章主角）</td></tr>
+      <tr><td><code>owl:</code></td><td>http://www.w3.org/2002/07/owl#</td><td>Web 本体语言——公理与推理（第 2 章主角）</td></tr>
+      <tr><td><code>xsd:</code></td><td>http://www.w3.org/2001/XMLSchema#</td><td>字面量的数据类型（xsd:string、xsd:integer…）</td></tr>
+      <tr><td><code>skos:</code></td><td>http://www.w3.org/2004/02/skos/core#</td><td>知识组织系统/词表（第 3 章主角）</td></tr>
+      <tr><td><code>schema:</code></td><td>https://schema.org/</td><td>Schema.org 通用词表（公司、人、事件…）</td></tr>
+      <tr><td><code>foaf:</code></td><td>http://xmlns.com/foaf/0.1/</td><td>「朋友的朋友」人物词表</td></tr>
+      <tr><td><code>prov:</code></td><td>http://www.w3.org/ns/prov#</td><td>溯源 PROV-O（第 7 章会用到）</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Semantica 的本体模块里有一个专门的 <code>NamespaceManager</code>
+    （<code>semantica/ontology/namespace_manager.py</code>）负责生成、校验、绑定这些前缀——
+    第三部分精读它。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="字符串谓语与 IRI 谓语的合并对比">
+      <text style="fill:var(--fg)" x="360" y="22" text-anchor="middle" font-size="13" font-weight="700">两个数据集合并时：字符串谓语 vs IRI 谓语</text>
+
+      <!-- left: string predicates -->
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="30" y="40" width="310" height="170" rx="10" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="185" y="66" text-anchor="middle" font-size="13" font-weight="700">字符串谓语：合不上</text>
+      <text style="fill:var(--fg-dim)" x="185" y="92" text-anchor="middle" font-size="11">数据集 A: "works_for"</text>
+      <text style="fill:var(--fg-dim)" x="185" y="112" text-anchor="middle" font-size="11">数据集 B: "works_for"</text>
+      <text style="fill:var(--fail)" x="185" y="142" text-anchor="middle" font-size="11">字形相同 ≠ 含义相同</text>
+      <text style="fill:var(--fg-dim)" x="185" y="162" text-anchor="middle" font-size="11">机器无从判断是否同一概念</text>
+      <text style="fill:var(--fg-dim)" x="185" y="188" text-anchor="middle" font-size="11">→ 合并结果一团疑云</text>
+
+      <!-- right: IRI predicates -->
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="380" y="40" width="310" height="170" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="535" y="66" text-anchor="middle" font-size="13" font-weight="700">IRI 谓语：天然缝合</text>
+      <text style="fill:var(--fg-dim)" x="535" y="92" text-anchor="middle" font-size="11">数据集 A: schema:worksFor</text>
+      <text style="fill:var(--fg-dim)" x="535" y="112" text-anchor="middle" font-size="11">数据集 B: schema:worksFor</text>
+      <text style="fill:var(--pass)" x="535" y="142" text-anchor="middle" font-size="11">同一 IRI = 同一全局坐标</text>
+      <text style="fill:var(--fg-dim)" x="535" y="162" text-anchor="middle" font-size="11">机器可确定二者同一含义</text>
+      <text style="fill:var(--fg-dim)" x="535" y="188" text-anchor="middle" font-size="11">→ 三元组直接取并集</text>
+    </svg>
+    <figcaption>互操作性（interoperability）的本质：IRI 给每个概念一个全球唯一的坐标，
+    不同来源的数据靠共享坐标自动缝合。字符串只保证「长得一样」。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-identity-resolution">1.4 实体同一性：ACME Corporation 与 Acme Corp.</h2>
+
+  <p>
+    摸底第三题是行业里天天发生的真问题：Salesforce 里存 <code>ACME Corporation</code>，
+    年报 PDF 里印 <code>Acme Corp.</code>，招聘网站上写 <code>Acme</code>。它们是同一家公司吗？
+  </p>
+
+  <p>
+    <strong>在关系数据库里</strong>，你会建一张 <code>companies</code> 表，用自增主键
+    <code>id=42</code> 保证同一性——前提是<strong>入库前</strong>有人（或某段 ETL 代码）判断过
+    「这三名字是同一家」。同一性是建表时就定死的内部约定，跨库之后失效：另一家公司的
+    <code>id=42</code> 是完全不同的实体，JOIN 语义靠外键，而外键只在同一个库内有意义。
+  </p>
+
+  <p>
+    <strong>在 RDF 里</strong>，思路反转：
+  </p>
+  <ul>
+    <li>名字<strong>只是属性</strong>。<code>schema:name</code> 是一个普通的谓语，一个实体可以有
+        一堆名字（法定名、简称、曾用名），它们是挂在同一节点上的字面量，谁也不覆盖谁；</li>
+    <li>同一性<strong>由 IRI 承载</strong>。如果两个来源对同一实体恰好用了同一个 IRI，图自动缝合；
+        如果用了不同 IRI（<code>ex:acme</code> 和 <code>salesforce:account_881</code>），
+        图里就是两个节点——直到你<strong>显式地</strong>声明它们相同。</li>
+  </ul>
+
+  <p>
+    「显式声明相同」的标准武器是 OWL 的等价公理：<code>owl:sameAs</code>：
+  </p>
+
+  <pre><code>ex:acme                owl:sameAs  &lt;https://salesforce.example/account_881&gt; .
+ex:acme                schema:name "ACME Corporation", "Acme Corp." .   # 两个名字并存
+&lt;…account_881&gt;         schema:name "Acme Corp." .</code></pre>
+
+  <p>
+    但注意：<strong>RDF 不会自动发现</strong> <code>ex:acme</code> 和 <code>account_881</code>
+    该被 sameAs——发现这个事实的过程叫<strong>实体解析</strong>（entity resolution）/ 实体对齐，
+    它是一个独立的工程问题：靠名字相似度、域名、地址等信号计算置信度，超过阈值才合并。
+    这正是 Semantica 里 <code>semantica.deduplication</code> 模块
+    （<code>DuplicateDetector</code> + <code>EntityMerger</code>，语义相似度 + blocking 策略）
+    和 <code>semantica.conflicts</code> 模块（两来源说法打架时的检测与仲裁）存在的意义。
+    本书第 6 章会把它们放进数据流里讲。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="实体解析：两个来源的名字指向同一实体">
+      <!-- source A -->
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="30" y="30" width="180" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="120" y="58" text-anchor="middle" font-size="12" font-weight="700">Salesforce 记录</text>
+      <text style="fill:var(--fg-dim)" x="120" y="80" text-anchor="middle" font-size="11">"ACME Corporation"</text>
+
+      <!-- source B -->
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="30" y="160" width="180" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="120" y="188" text-anchor="middle" font-size="12" font-weight="700">年报 PDF</text>
+      <text style="fill:var(--fg-dim)" x="120" y="210" text-anchor="middle" font-size="11">"Acme Corp."</text>
+
+      <!-- entity resolution box -->
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="300" y="85" width="170" height="90" rx="10" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="385" y="118" text-anchor="middle" font-size="13" font-weight="700">实体解析</text>
+      <text style="fill:var(--fg-dim)" x="385" y="140" text-anchor="middle" font-size="10">相似度 · 信号 · 置信度</text>
+      <text style="fill:var(--fg-dim)" x="385" y="158" text-anchor="middle" font-size="10">（deduplication 模块）</text>
+
+      <line style="stroke:var(--muted)" x1="210" y1="65" x2="295" y2="110" stroke-width="2"/>
+      <polygon style="fill:var(--muted)" points="295,110 286,108 291,101"/>
+      <line style="stroke:var(--muted)" x1="210" y1="195" x2="295" y2="152" stroke-width="2"/>
+      <polygon style="fill:var(--muted)" points="295,152 286,154 291,161"/>
+
+      <!-- merged entity -->
+      <circle style="fill:var(--surface-2);stroke:var(--pass)" cx="600" cy="130" r="46" stroke-width="2.5"/>
+      <text style="fill:var(--pass)" x="600" y="126" text-anchor="middle" font-size="14" font-weight="700">ex:acme</text>
+      <text style="fill:var(--fg-dim)" x="600" y="144" text-anchor="middle" font-size="10">唯一 IRI</text>
+
+      <line style="stroke:var(--pass)" x1="470" y1="130" x2="550" y2="130" stroke-width="2"/>
+      <polygon style="fill:var(--pass)" points="550,130 542,126 542,134"/>
+
+      <text style="fill:var(--fg-dim)" x="600" y="66" text-anchor="middle" font-size="10">schema:name "ACME Corporation"</text>
+      <text style="fill:var(--fg-dim)" x="600" y="82" text-anchor="middle" font-size="10">schema:name "Acme Corp."</text>
+      <text style="fill:var(--fg-dim)" x="600" y="205" text-anchor="middle" font-size="10">所有名字作为属性并存</text>
+      <text style="fill:var(--fg-dim)" x="600" y="222" text-anchor="middle" font-size="10">同一性 = IRI，不是名字</text>
+    </svg>
+    <figcaption>RDF 的同一性模型：名字是属性，同一性由 IRI 承载；跨来源发现「同一实体」
+    需要显式的实体解析步骤（ owl:sameAs 或直接合并），RDF 引擎不会替你猜。</figcaption>
+  </figure>
+
+  <div class="demo" data-demo="mergeSemantics">
+    <div class="demo-title">动手试 — 合并两个来源：JSON vs RDF</div>
+    <p>同一个「两家系统各知道 Acme 一半信息」的场景，用 JSON 表示和用三元组表示，
+       合并时会发生完全不同的事情。点按钮看对比。</p>
+    <button data-run>合并两个数据源</button>
+    <div class="demo-output empty">点击按钮查看对比。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-vs-schema-kg">1.5 本体 vs 数据库 schema vs 知识图谱</h2>
+
+  <p>
+    摸底第二题问「表结构表达不了什么」，答案有三个（类层级继承、属性形式化语义、等价性公理），
+    NOT NULL 和主外键反而是关系数据库的强项。展开讲。
+  </p>
+
+  <p><strong>数据库 schema（表结构）</strong>回答的是「数据长什么样才能入库」：列名、类型、
+  非空、唯一、外键。它的世界是<strong>封闭世界</strong>（closed world）：表里没有的行就是不存在的，
+  外键指不到就是不合法。<strong>本体</strong>回答的是「这个领域的概念如何互相联系、可以推出什么」：
+  类层级、属性的 domain/range、等价/传递/对称公理。它的世界是<strong>开放世界</strong>（open world）：
+  没写出来的东西不是假的，只是「还不知道」——因为本体面对的是无穷的、永不完整的真实世界。
+  </p>
+
+  <div class="box" style="border-left-color:var(--warn);">
+    <div class="box-title">封闭世界 vs 开放世界（一个实验说清）</div>
+    <p style="margin:.3rem 0;">
+      问：「Alice 有没有 manager？」
+      SQL 世界：employees 表里 Alice 的 manager_id 为 NULL → <strong>她没有 manager</strong>（表是全部事实）。
+      本体世界：图里没有 alice 的 managesMe 边 → <strong>目前不知道</strong>——也许有，只是还没录入。
+      这不是谁对谁错，是两种语义约定。混用它们是知识工程项目最常见的 bug 来源之一。
+    </p>
+  </div>
+
+  <p>把三者的分工列成对照表（这大概是全书你会翻回来看得最多的一张表）：</p>
+
+  <table>
+    <thead><tr><th></th><th>数据库 schema</th><th>本体（OWL）</th><th>知识图谱（数据层）</th></tr></thead>
+    <tbody>
+      <tr><td><strong>回答什么</strong></td><td>数据入库的形状约束</td><td>领域概念的形式化语义</td><td>具体的事实实例</td></tr>
+      <tr><td><strong>基本单元</strong></td><td>表、列、行</td><td>类（Class）、属性（Property）、公理（Axiom）</td><td>三元组（实例层的节点和边）</td></tr>
+      <tr><td><strong>层级</strong></td><td>无继承（外键模拟）</td><td>subClassOf 多重继承 + 自动传递</td><td>实例 rdf:type 挂到类上</td></tr>
+      <tr><td><strong>约束语义</strong></td><td>违反即拒绝写入</td><td>公理用于<strong>推理</strong>（推出隐含事实）；SHACL 才管验证（第 3 章）</td><td>—</td></tr>
+      <tr><td><strong>世界假设</strong></td><td>封闭世界</td><td>开放世界</td><td>随本体</td></tr>
+      <tr><td><strong>同一性</strong></td><td>库内主键</td><td>IRI + owl:sameAs</td><td>IRI</td></tr>
+      <tr><td><strong>典型查询</strong></td><td>SQL JOIN</td><td>推理 + SPARQL</td><td>图遍历 + SPARQL/Cypher</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    <strong>知识图谱</strong>不是第三种并列的东西，而是「本体（模式层）+ 实例数据（数据层）」的组合：
+    一张遵循某本体规定的节点和边。Semantica 里对应的就是那个贯穿全 repo 的字典形状
+    <code>{"entities": [...], "relationships": [...]}</code>——entities/relationships 的
+    <code>type</code> 字段（<code>"Person"</code>、<code>"Organization"</code>、<code>"works_for"</code>）
+    就是模式层概念的实例化。第 5 章你会看到 <code>GraphBuilder</code> 如何从文档生成它，
+    第 8 章你会看到 <code>OntologyGenerator</code> 如何反过来从这些数据<strong>推断出</strong>模式层。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="schema、本体、知识图谱三面板对比">
+      <!-- schema panel -->
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="25" y="30" width="210" height="180" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="130" y="58" text-anchor="middle" font-size="13" font-weight="700">数据库 schema</text>
+      <text style="fill:var(--fg-dim)" x="130" y="84" text-anchor="middle" font-size="11">employees(id, name,</text>
+      <text style="fill:var(--fg-dim)" x="130" y="102" text-anchor="middle" font-size="11">  title, company_id NOT NULL)</text>
+      <text style="fill:var(--accent-2)" x="130" y="128" text-anchor="middle" font-size="11">强项：形状强制、事务、JOIN</text>
+      <text style="fill:var(--fail)" x="130" y="152" text-anchor="middle" font-size="11">弱项：无继承、无推理、</text>
+      <text style="fill:var(--fail)" x="130" y="170" text-anchor="middle" font-size="11">同一性出库即失效</text>
+      <text style="fill:var(--fg-dim)" x="130" y="196" text-anchor="middle" font-size="10">封闭世界</text>
+
+      <!-- ontology panel -->
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="255" y="30" width="210" height="180" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="360" y="58" text-anchor="middle" font-size="13" font-weight="700">本体（模式层）</text>
+      <text style="fill:var(--fg-dim)" x="360" y="84" text-anchor="middle" font-size="11">:Manager ⊑ :Employee</text>
+      <text style="fill:var(--fg-dim)" x="360" y="102" text-anchor="middle" font-size="11">:worksFor ⊑ :affiliatedWith</text>
+      <text style="fill:var(--accent)" x="360" y="128" text-anchor="middle" font-size="11">强项：公理推理、复用、</text>
+      <text style="fill:var(--accent)" x="360" y="146" text-anchor="middle" font-size="11">跨数据集语义互通</text>
+      <text style="fill:var(--fail)" x="360" y="170" text-anchor="middle" font-size="11">弱项：不擅长强制形状</text>
+      <text style="fill:var(--fg-dim)" x="360" y="196" text-anchor="middle" font-size="10">开放世界</text>
+
+      <!-- KG panel -->
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="485" y="30" width="210" height="180" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="590" y="58" text-anchor="middle" font-size="13" font-weight="700">知识图谱（数据层）</text>
+      <text style="fill:var(--fg-dim)" x="590" y="84" text-anchor="middle" font-size="11">alice :worksFor acme .</text>
+      <text style="fill:var(--fg-dim)" x="590" y="102" text-anchor="middle" font-size="11">alice rdf:type :Manager .</text>
+      <text style="fill:var(--pass)" x="590" y="128" text-anchor="middle" font-size="11">强项：多跳遍历、</text>
+      <text style="fill:var(--pass)" x="590" y="146" text-anchor="middle" font-size="11">自带来源与上下文</text>
+      <text style="fill:var(--fail)" x="590" y="170" text-anchor="middle" font-size="11">弱项：没有本体就是裸图，</text>
+      <text style="fill:var(--fail)" x="590" y="188" text-anchor="middle" font-size="11">类型混乱、无法推理</text>
+      <text style="fill:var(--fg-dim)" x="590" y="204" text-anchor="middle" font-size="10">= 本体 + 实例</text>
+    </svg>
+    <figcaption>三者不是竞争关系：schema 管入库形状，本体管领域语义，KG 是「按本体的规矩装满事实的图」。
+    Semantica 的流水线恰好把三者串了起来：多源数据 → KG → 从 KG 推断本体 → 用本体（SHACL）反过来治理 KG。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">1.6 本章回顾</h2>
+  <ul>
+    <li><strong>本体</strong> = 对概念化的显式、形式化规范；在 AI 系统里它是机器可读的世界观，
+        位于「现实世界 → 概念化 → <strong>本体（模式层）</strong> → 实例数据（数据层）」的第三层。</li>
+    <li><strong>RDF 三元组</strong>（主语-谓语-宾语）是最小的知识原子；多条三元组通过共享 IRI 缝合成图。
+        Turtle 是最常见的文本写法。</li>
+    <li>成分规则：<strong>主语、谓语必须是 IRI；宾语可以是 IRI 或字面量</strong>；空白节点是免命名的第三种成分。
+        「IRI 是全球坐标，字面量是本地便签。」</li>
+    <li>谓语用 IRI 而非字符串，是为了<strong>跨数据集互操作</strong>：同一 IRI = 同一含义，合并即取并集。</li>
+    <li><strong>同一性由 IRI 承载，名字只是属性</strong>；跨来源发现同一实体需要显式的实体解析
+        （owl:sameAs / deduplication），RDF 不自动合并。</li>
+    <li>本体（开放世界、公理推理）与数据库 schema（封闭世界、形状强制）互补；
+        <strong>知识图谱 = 本体 + 实例数据</strong>。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>「本体 = 类图 / ER 图」</strong>——类图和 ER 图没有形式化语义，不能推理。
+          能推出隐含事实（Manager 是 Employee → Alice 是 Manager 则 Alice 是 Employee）才算本体。</li>
+      <li><strong>「RDF 是 XML」</strong>——RDF 是数据模型（三元组集合），XML 只是它众多序列化格式之一
+          （还有 Turtle、JSON-LD、N-Triples）。日常写 Turtle。</li>
+      <li><strong>「RDF 会自动合并相似名字」</strong>——不会。名字是字面量属性；同一性要么靠相同 IRI，
+          要么显式声明/解析。期待自动合并是新人最常见的翻车点。</li>
+      <li><strong>「开放世界里没查到 = 不存在」</strong>——本体的语义是「不知道」。
+          把 SQL 直觉带进 OWL 推理会得出错误结论。</li>
+      <li><strong>「有了 KG 就不需要本体」</strong>——没有模式层的图只是节点汤：类型混乱、无法验证、
+          无法推理。这正是 Semantica 要从数据反向生成并治理本体的原因。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="1">
+    <h2>第 1 章测试</h2>
+
+    <div class="q" data-id="1-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 三个成分（至少主语和谓语）都是 IRI，谓语必须是全局标识符，机器才能跨数据集理解。"
+         data-rationale="B 正确：IRI 给概念一个全局坐标，这是互操作的基础。A 的字符串谓语只在单个数据集内有意义。C 的 JSON 没有全局标识符和标准三元组语义，两份 JSON 同名字段会打架。D 混淆了数据模型与序列化格式——RDF 不要求 XML，日常用 Turtle。"
+         data-review="sec-triple-model">
+      <div class="prompt"><span class="qnum">Q1.</span> 想表达「Alice 在 Acme Corp 担任 CTO」且希望被机器跨数据集理解，以下哪种写法是 RDF 的正确打开方式？</div>
+      <label class="opt"><input type="radio" name="q-1-1" value="a"> A. <code>("Alice", "works_for", "Acme Corp")</code> —— 字符串谓语简洁明了</label>
+      <label class="opt"><input type="radio" name="q-1-1" value="b"> B. <code>(&lt;…/alice&gt;, &lt;…#worksFor&gt;, &lt;…/acme&gt;)</code> —— 成分都是 IRI</label>
+      <label class="opt"><input type="radio" name="q-1-1" value="c"> C. 存 JSON：<code>{"name":"Alice","employer":"Acme"}</code></label>
+      <label class="opt"><input type="radio" name="q-1-1" value="d"> D. 写成 XML：<code>&lt;person&gt;Alice&lt;/person&gt;&lt;worksFor&gt;Acme&lt;/worksFor&gt;</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-2" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 宾语。字面量只能出现在宾语位置；主语和谓语必须是 IRI。"
+         data-rationale="RDF 的成分规则：主语 = IRI（或空白节点），谓语 = IRI，宾语 = IRI、字面量或空白节点。字符串 "CTO"、数字、日期都是字面量，它们是图的叶子，不能再有出边。"
+         data-review="sec-iri-literal">
+      <div class="prompt"><span class="qnum">Q2.</span> 字面量（如 <code>"CTO"</code>、<code>250000</code>）在 RDF 三元组中可以出现在哪个位置？</div>
+      <label class="opt"><input type="radio" name="q-1-2" value="a"> A. 任意位置</label>
+      <label class="opt"><input type="radio" name="q-1-2" value="b"> B. 主语或宾语</label>
+      <label class="opt"><input type="radio" name="q-1-2" value="c"> C. 只能是宾语</label>
+      <label class="opt"><input type="radio" name="q-1-2" value="d"> D. 只能是谓语</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-3" data-type="mcq" data-multiselect="true" data-correct='["a","b","d"]'
+         data-answer="A、B、D。C（NOT NULL）是关系数据库的本职强项，本体不擅长也不负责。"
+         data-rationale="OWL 能表达：类层级与继承（A，subClassOf 自动传递）；属性公理如 domain/range 并据此推出隐含事实（B）；实体等价性 owl:sameAs（D）。而「字段非空、类型约束、写入前拒绝」这类形状强制是数据库 schema 的强项——本体世界（开放世界假设）里做形状验证要靠第 3 章的 SHACL。"
+         data-review="sec-vs-schema-kg">
+      <div class="prompt"><span class="qnum">Q3.</span> 公司已有 PostgreSQL 表结构。以下哪些信息是本体（OWL）能表达、而普通表结构表达不了的？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-1-3" value="a"> A. 类层级继承：Manager 是 Employee 的子类，自动继承上层属性</label>
+      <label class="opt"><input type="checkbox" name="q-1-3" value="b"> B. 属性的形式化语义：worksFor 的 domain/range 公理，可推出未显式写出的关系</label>
+      <label class="opt"><input type="checkbox" name="q-1-3" value="c"> C. 字段的 NOT NULL 约束</label>
+      <label class="opt"><input type="checkbox" name="q-1-3" value="d"> D. 实体等价性公理：两个不同标识符代表同一实体（owl:sameAs）</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-4" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 同一性由 IRI 承载，名字只是属性；跨来源判断同一实体需要显式的实体解析（如 owl:sameAs 或 deduplication 模块）。"
+         data-rationale="A 错：RDF 不做字符串匹配，但也不是「永远两个实体」——可以做显式解析。C 错：RDF 引擎不做模糊匹配，这是新人最大的误解。D 错：外键只在同一个数据库内有意义。正确姿势：名字挂为多值属性，同一性靠 IRI 或显式 sameAs，发现过程（相似度、置信度）是独立的工程问题。"
+         data-review="sec-identity-resolution">
+      <div class="prompt"><span class="qnum">Q4.</span> Salesforce 给出 "ACME Corporation"，年报 PDF 给出 "Acme Corp."。在 RDF 知识图谱里，判断它们可能是同一实体的机制是什么？</div>
+      <label class="opt"><input type="radio" name="q-1-4" value="a"> A. 字符串完全相等才合并，否则永远是两个实体</label>
+      <label class="opt"><input type="radio" name="q-1-4" value="b"> B. IRI 标识实体、名字只是属性；同一性要靠显式实体解析建立</label>
+      <label class="opt"><input type="radio" name="q-1-4" value="c"> C. RDF 引擎自带模糊匹配，自动合并相似名字</label>
+      <label class="opt"><input type="radio" name="q-1-4" value="d"> D. 和关系库一样，用外键 JOIN 判断</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-5" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 机器看到两个谓语 IRI 相同，可确定是同一含义，两份数据直接取并集缝合。"
+         data-rationale="IRI 的本质是全局坐标：同一 IRI = 同一概念，与谁写的、写在哪无关。字符串只有字形，"长得一样"推不出"含义一样"。这就是谓语必须是 IRI 的根本原因——互操作性。"
+         data-review="sec-iri-literal">
+      <div class="prompt"><span class="qnum">Q5.</span> 两个互不相识的团队都导出了员工数据，且都引用了 <code>https://schema.org/worksFor</code> 作为谓语。把两份数据放在一起时，机器能确定什么？</div>
+      <label class="opt"><input type="radio" name="q-1-5" value="a"> A. 什么也不能确定，需要人工映射字段</label>
+      <label class="opt"><input type="radio" name="q-1-5" value="b"> B. 只能确定字符串相同，含义仍可能不同</label>
+      <label class="opt"><input type="radio" name="q-1-5" value="c"> C. 同一 IRI = 同一全局概念，三元组可取并集合并</label>
+      <label class="opt"><input type="radio" name="q-1-5" value="d"> D. 能合并，但必须先把 IRI 转成字符串再比较</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-6" data-type="fill" data-accepted='["主语、谓语、宾语","主语 谓语 宾语","subject、predicate、object","subject predicate object","主语，谓语，宾语"]'
+         data-answer="主语（subject）、谓语（predicate）、宾语（object）。"
+         data-rationale="RDF 三元组的三个成分。主语是资源，谓语是关系/属性（必须是 IRI），宾语是资源或字面量。"
+         data-review="sec-triple-model">
+      <div class="prompt"><span class="qnum">Q6.</span> 填空：RDF 三元组的三个成分依次是 ______。（中文或英文均可，用顿号/逗号/空格分隔）</div>
+      <input type="text" class="fill" placeholder="例如：甲、乙、丙">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-7" data-type="fill" data-accepted='["deduplication","semantica.deduplication","去重模块","deduplication 模块"]'
+         data-answer="deduplication（semantica.deduplication，含 DuplicateDetector 与 EntityMerger）。"
+         data-rationale="Semantica 用 deduplication 模块做实体解析：blocking 候选生成 + 语义相似度打分，超过阈值才合并（EntityMerger 保留 provenance）。conflicts 模块则负责发现与仲裁相互矛盾的说法。"
+         data-review="sec-identity-resolution">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：在 Semantica 中，负责发现并合并重复实体（实体解析）的模块是 semantica.______。</div>
+      <input type="text" class="fill" placeholder="模块名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-8" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 本体是开放世界：没写出来的不是假的，只是还不知道；数据库是封闭世界：表里没有即不存在。"
+         data-rationale="封闭世界假设（SQL）：库内数据是全部事实，查无结果 = 否定。开放世界假设（RDF/OWL）：世界永远不完整，缺一条边只说明未知。两者没有对错，是语义约定；混用会导致推理错误，比如把「没有 manager 记录」理解成「确认没有 manager」。"
+         data-review="sec-vs-schema-kg">
+      <div class="prompt"><span class="qnum">Q8.</span> 本体/RDF 采用「开放世界假设」，它和数据库的「封闭世界假设」的区别，下面哪个表述是对的？</div>
+      <label class="opt"><input type="radio" name="q-1-8" value="a"> A. 开放世界 = 数据库不设密码，任何人可写</label>
+      <label class="opt"><input type="radio" name="q-1-8" value="b"> B. 开放世界里「没有陈述的事」不算假，只是未知；封闭世界里「表里没有」即不存在</label>
+      <label class="opt"><input type="radio" name="q-1-8" value="c"> C. 开放世界允许非法数据入库，封闭世界不允许</label>
+      <label class="opt"><input type="radio" name="q-1-8" value="d"> D. 两者只是术语差异，语义完全相同</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-9" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— 知识图谱 = 本体（模式层）+ 遵循本体的实例数据（数据层）的组合。"
+         data-rationale="KG 不是与本体并列的另一种东西：本体给出类、属性、公理（模式层），实例三元组把具体事实挂上去（数据层），两者合起来才叫知识图谱。A 把 KG 等同于存储软件；B 把它等同于序列化格式；C 把它等同于数据结构——都只摸到了一角，少了模式层就没有类型、约束与推理。"
+         data-review="sec-vs-schema-kg">
+      <div class="prompt"><span class="qnum">Q9.</span> 「知识图谱」和「本体」的关系，最准确的说法是？</div>
+      <label class="opt"><input type="radio" name="q-1-9" value="a"> A. 知识图谱就是 Neo4j 这类图数据库的别名</label>
+      <label class="opt"><input type="radio" name="q-1-9" value="b"> B. 知识图谱是本体的序列化格式</label>
+      <label class="opt"><input type="radio" name="q-1-9" value="c"> C. 本体是知识图谱的一个别称，二者完全等价</label>
+      <label class="opt"><input type="radio" name="q-1-9" value="d"> D. 知识图谱 = 本体（模式层）+ 实例数据（数据层）的组合</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="1-10" data-type="short"
+         data-key-points='["本体 = 对概念化的显式、形式化规范（机器可读的世界观/模式层）","与表结构的区别至少两条：类层级与公理推理 / 开放世界假设 / 同一性由 IRI 而非主键承载","三元组是知识原子：主谓宾，谓语必须是 IRI，宾语可为字面量","名字只是属性，同一性靠 IRI 与显式实体解析（owl:sameAs / dedup）","知识图谱 = 本体 + 实例数据的组合"]'
+         data-answer="本体是对某领域概念化的显式、形式化规范——它规定有哪些类、属性、公理，是机器可读的模式层。与表结构的区别：① 能表达类层级继承与属性公理并据此推理（表结构只有行列约束）；② 开放世界假设——缺数据只是未知，而 SQL 是封闭世界；③ 同一性由全局 IRI 承载，跨库依然有效（主键出库即失效）。知识以三元组（主-谓-宾）为原子，谓语必须是 IRI 以保证跨数据集互操作；名字只是属性，两个来源的实体是否同一需显式实体解析。知识图谱 = 本体（模式层）+ 遵循本体的实例三元组（数据层）。"
+         data-rationale="五个要点：定义、与 schema 的区别、三元组结构、同一性机制、KG 与本体的组合关系。说出定义 + 至少两条区别 + 三元组结构，说明本章主干已立住。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 用自己的话回答：(1) 本体在知识工程中的定义是什么？(2) 它和数据库表结构至少有哪些两点本质区别？(3) 知识图谱和本体是什么关系？</div>
+      <textarea class="short" placeholder="用自己的话写，不用背定义…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点——少勾不影响校准，多勾只骗自己。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="02-rdfs-owl.html"><strong>RDFS 与 OWL：给三元组装上语义的描述语言栈</strong></a>。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 2 章 — 描述语言栈：RDFS 与 OWL</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 2 章 · 第一部分：领域基础</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="2">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 2 · 第一部分：本体领域基础</div>
+    <h1>描述语言栈：RDFS 与 OWL</h1>
+    <p class="lede">
+      第 1 章的三元组只能表达「一个个孤立的事实」。这一章给图装上<strong>语义</strong>：
+      RDFS 教会机器「类有层级、属性有归属」，OWL 再加上公理与推理。
+      这是本体领域的核心语言栈——也是 Semantica 的
+      <code>OWLGenerator</code>（<code>semantica/ontology/owl_generator.py</code>）真正生成的东西。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能读懂并手写 RDFS 的五个核心谓语：<code>rdf:type</code>、<code>rdfs:subClassOf</code>、<code>rdfs:subPropertyOf</code>、<code>rdfs:domain</code>、<code>rdfs:range</code></li>
+      <li>能手动执行 RDFS 推理：给定 subClassOf 链和实例数据，推出所有隐含的 rdf:type</li>
+      <li>能区分 OWL 的三类属性（ObjectProperty / DatatypeProperty / AnnotationProperty）并说出各自的用途</li>
+      <li>能解释至少四种 OWL 公理（subclass、equivalentClass、disjointWith、property 特征如 transitive/functional）各管什么</li>
+      <li>能说清 OWL 子语言（DL / RL / EL / Full）在表达力与推理成本之间的权衡</li>
+      <li>能对照 Semantica 的 <code>OWLGenerator</code> 源码，指出它输出了哪些 OWL 构件、没输出哪些</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-rdfs">2.1 RDFS：给图装上最薄的语义层</h2>
+
+  <p>
+    RDF 三元组本身没有「类」的概念——你可以写 <code>ex:alice ex:worksFor ex:acme</code>，
+    但没有任何机制说明「alice 是一个人」「worksFor 是一种雇佣关系」。
+    <strong>RDFS（RDF Schema）</strong>就是解决这个问题的最薄一层语言：它本身也是一组三元组，
+    用一套预定义的谓语来<strong>谈论你自己的类和属性</strong>。核心只有五个：
+  </p>
+
+  <table>
+    <thead><tr><th>谓语</th><th>读作</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>rdf:type</code></td><td>「是…的实例」</td><td>把一个资源挂到一个类上：<code>ex:alice rdf:type ex:Person</code></td></tr>
+      <tr><td><code>rdfs:subClassOf</code></td><td>「是…的子类」</td><td>声明类层级：<code>ex:CTO rdfs:subClassOf ex:Manager</code>（多重继承合法）</td></tr>
+      <tr><td><code>rdfs:subPropertyOf</code></td><td>「是…的子属性」</td><td>属性层级：<code>ex:worksFor rdfs:subPropertyOf ex:affiliatedWith</code></td></tr>
+      <tr><td><code>rdfs:domain</code></td><td>「主语必须是」</td><td>属性的所属类：<code>ex:worksFor rdfs:domain ex:Person</code></td></tr>
+      <tr><td><code>rdfs:range</code></td><td>「宾语必须是」</td><td>属性的取值类：<code>ex:worksFor rdfs:range ex:Organization</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    这些谓语真正厉害的地方不是「声明」，而是<strong>它们自带推理规则</strong>。三条最重要的：
+  </p>
+
+  <ul>
+    <li><strong>类型上传</strong>：若 <code>C rdfs:subClassOf D</code> 且 <code>x rdf:type C</code>，
+        则 <code>x rdf:type D</code>。子类的实例也是父类的实例。</li>
+    <li><strong>subClassOf 传递</strong>：若 <code>C ⊑ D</code> 且 <code>D ⊑ E</code>，则 <code>C ⊑ E</code>。
+        层级链条自动闭合。</li>
+    <li><strong>domain/range 归属</strong>：若 <code>p rdfs:domain C</code> 且 <code>x p y</code>，
+        则 <code>x rdf:type C</code>。谁用了这个属性，谁就「被是」这个类。</li>
+  </ul>
+
+  <div class="box" style="border-left-color:var(--warn);">
+    <div class="box-title">最容易被误解的一点：domain/range 不是校验！</div>
+    <p style="margin:.3rem 0;">
+      关系数据库直觉里，「worksFor 的 domain 是 Person」听起来像外键约束——写错了就拒绝入库。
+      RDFS 的语义完全相反：<strong>它是加事实的规则，不是拒绝数据的规则</strong>。
+      一个「错误」的 <code>ex:toaster ex:worksFor ex:acme</code> 不会报错，
+      只会让推理机得出「烤面包机是人」这个结论。要做「校验并拒绝」，得用第 3 章的 SHACL——
+      这也是为什么 Semantica 在 OWL 之外还实现了一整套 SHACL 生成与验证（第 10 章）。
+    </p>
+  </div>
+
+  <div class="demo" data-demo="rdfsInference">
+    <div class="demo-title">动手试 — 在脑子里跑一台 RDFS 推理机</div>
+    <p>一个三层的类层级 + 一个带 domain 的属性。点按钮看显式三元组如何被推理机补全。</p>
+    <button data-run>运行 RDFS 推理</button>
+    <div class="demo-output empty">点击按钮查看推理过程。</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-owl">2.2 OWL：真正的本体语言</h2>
+
+  <p>
+    RDFS 能表达「层级」和「归属」，但很多领域知识它无能为力：「Manager 和 Intern
+    不可能同时成立」（互斥）」「parent 是传递关系」「每个人最多有一个 biologicalMother」（函数性）」
+    「Acme 和 ACME Corporation 是同一家公司」（等价）。这些是
+    <strong>OWL（Web Ontology Language）</strong>的领地。OWL 在 RDFS 之上扩展了一套公理词汇，
+    让机器可以<strong>推出你从未显式写下的事实</strong>，甚至<strong>发现矛盾</strong>。
+  </p>
+
+  <p><strong>先看属性的三个种类</strong>（OWL 要求你在生成时就分清，Semantica 的生成器也是按这个三分的）：</p>
+
+  <ul>
+    <li><code>owl:ObjectProperty</code> —— 宾语是<strong>资源</strong>的关系：<code>worksFor</code>、
+        <code>partyTo</code>。对应 KG 里的「边」。</li>
+    <li><code>owl:DatatypeProperty</code> —— 宾语是<strong>字面量</strong>的属性：<code>hasTitle</code>（字符串）、
+        <code>valuation</code>（xsd:long）。对应 KG 里节点的「属性字段」。</li>
+    <li><code>owl:AnnotationProperty</code> —— 元数据标注：<code>rdfs:label</code>、<code>rdfs:comment</code>。
+        不参与推理，纯粹给人看。</li>
+  </ul>
+
+  <p><strong>再看最常用的一批 OWL 公理</strong>（掌握这些，你就能读懂 90% 的工业本体）：</p>
+
+  <table>
+    <thead><tr><th>公理</th><th>意思</th><th>能推出什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>A rdfs:subClassOf B</code></td><td>A 是 B 的子类（OWL 沿用）</td><td>实例类型上传（同 RDFS）</td></tr>
+      <tr><td><code>A owl:equivalentClass B</code></td><td>A 和 B 是同一个类</td><td>双向类型互推</td></tr>
+      <tr><td><code>A owl:disjointWith B</code></td><td>A 和 B 互斥：没有东西能同时属于两者</td><td>检测<strong>矛盾</strong>（一致性检查的基石）</td></tr>
+      <tr><td><code>x owl:sameAs y</code></td><td>x 和 y 是同一实体（第 1 章见过）</td><td>属性在 x/y 之间互推</td></tr>
+      <tr><td><code>p rdf:type owl:TransitiveProperty</code></td><td>p 传递（如 ancestor）</td><td>a p b, b p c ⇒ a p c</td></tr>
+      <tr><td><code>p rdf:type owl:SymmetricProperty</code></td><td>p 对称（如 knows）</td><td>a p b ⇒ b p a</td></tr>
+      <tr><td><code>p rdf:type owl:FunctionalProperty</code></td><td>p 函数性：每个主语最多一个宾语</td><td>a p b, a p c ⇒ b sameAs c</td></tr>
+      <tr><td><code>p owl:inverseOf q</code></td><td>p 和 q 互逆（worksFor / employs）</td><td>a p b ⇒ b q a</td></tr>
+      <tr><td><code>owl:cardinality</code> / <code>owl:minCardinality</code></td><td>属性取值个数限制</td><td>条数不足/超标 → 不一致或补全</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    一个组合拳的例子。声明：<code>ex:Manager owl:disjointWith ex:Intern</code>，
+    然后某个数据源说 <code>ex:dave rdf:type ex:Manager</code>，另一个说
+    <code>ex:dave rdf:type ex:Intern</code>。<strong>没有任何一条数据单独是错的</strong>，
+    但推理机可以把两条放在一起推出 <code>owl:Nothing</code>（矛盾）——本体让你拥有
+    「跨来源发现逻辑冲突」的能力。Semantica 把这个思路产品化成了
+    <code>semantica.conflicts</code> 的「logical conflict」检测（第 6 章）。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RDF、RDFS、OWA 三层语言栈">
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="90" y="20" width="540" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="360" y="48" text-anchor="middle" font-size="15" font-weight="700">RDF —— 事实层</text>
+      <text style="fill:var(--fg-dim)" x="360" y="72" text-anchor="middle" font-size="11">主-谓-宾三元组 · 只会说「什么是什么」</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="50" y="106" width="620" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="360" y="134" text-anchor="middle" font-size="15" font-weight="700">RDFS —— 结构层</text>
+      <text style="fill:var(--fg-dim)" x="360" y="158" text-anchor="middle" font-size="11">subClassOf · subPropertyOf · domain/range · 会「归类和传递」</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="10" y="192" width="700" height="70" rx="10" stroke-width="2.5"/>
+      <text style="fill:var(--accent)" x="360" y="220" text-anchor="middle" font-size="15" font-weight="700">OWL —— 公理层</text>
+      <text style="fill:var(--fg-dim)" x="360" y="244" text-anchor="middle" font-size="11">等价 · 互斥 · 传递/对称/函数性 · 基数 · sameAs · 会「推出隐含事实、发现矛盾」</text>
+    </svg>
+    <figcaption>语言栈是向上增强的：每一层都包含下一层。RDF 陈述事实，RDFS 组织事实，
+    OWL 公理化事实。Semantica 的 OWLGenerator 输出的 Turtle 同时用到三层词汇。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-owl-in-semantica">2.3 对照真码：Semantica 的 OWLGenerator 输出什么</h2>
+
+  <p>
+    读一段真实源码。<code>semantica/ontology/owl_generator.py</code> 的
+    <code>OWLGenerator._generate_with_rdflib()</code>（第 210–328 行）把一个本体字典变成 rdflib 图，
+    核心映射就三步：
+  </p>
+
+  <pre><code># semantica/ontology/owl_generator.py:243-263（节选，注释为本书所加）
+classes = ontology.get("classes", [])
+for cls in classes:
+    class_uri = URIRef(cls.get("uri") or gen_ns_manager.generate_class_iri(class_name))
+    g.add((class_uri, RDF.type, OWL.Class))            # ← 每个类：a owl:Class
+    ...
+    if subclass_of:                                    # ← 层级：rdfs:subClassOf
+        g.add((class_uri, RDFS.subClassOf, parent_uri))
+
+# 第 267–316 行：属性分两支
+if prop.get("type") == "object":                       # ← 关系 → owl:ObjectProperty
+    g.add((prop_uri, RDF.type, OWL.ObjectProperty))
+    for domain in domains:
+        g.add((prop_uri, RDFS.domain, domain_uri))     # ← domain/range 公理
+    for range_val in ranges:
+        g.add((prop_uri, RDFS.range, range_uri))
+elif self._is_datatype_property(prop.get("type")):     # ← 属性字段 → owl:DatatypeProperty
+    g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
+    range_uri = self._resolve_datatype_range_uri(range_val, ...)  # ← xsd:string 等
+    g.add((prop_uri, RDFS.range, range_uri))</code></pre>
+
+  <p>
+    也就是说，Semantica 生成的 OWL 目前覆盖语言栈的中间地带：<strong>OWL 类 + RDFS 层级与
+    domain/range + 属性三分</strong>。而上一节表里的高阶公理——disjointWith、传递性、基数限制、
+    等价类——<strong>不在这条主生成路径上</strong>。这不是坏事，而是「从数据自动生成」路线的合理剪裁：
+    你能从数据频率里可靠推断出「有哪些类、谁连谁」，但数据本身很少能告诉你「Manager 和 Intern 互斥」——
+    那类领域公理需要人（或 LLM 辅助的 <code>LLMOntologyGenerator</code>，见第 11 章）来补。
+    读这本书时要养成习惯：<strong>看到文档说「支持 OWL」，要问清楚是 OWL 的哪个子集</strong>。
+  </p>
+
+  <p>
+    另一个值得注意的工程细节：<code>OWLGenerator</code> 在 rdflib 缺失时会退化为
+    <code>_generate_basic()</code>（第 330–413 行）——手工拼 Turtle 字符串。两条路径输出语义等价的东西，
+    但字符串版没有经过 rdflib 的语法校验。这种「优雅降级 + 明确警告日志」的模式在 Semantica 里很常见
+    （构造函数第 90–93 行的 warning）。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-profiles">2.4 OWL 子语言：表达力与推理成本的账单</h2>
+
+  <p>
+    OWL 公理不是免费的。公理越多，推理（算出所有隐含三元组）的计算成本越高，某些构造甚至让推理
+    <strong>不可判定</strong>（理论上算不完）。W3C 因此切出了几个<strong>子语言（profile）</strong>，
+    各自在表达力和可计算性之间划线：
+  </p>
+
+  <table>
+    <thead><tr><th>子语言</th><th>定位</th><th>推理成本</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td><strong>OWL DL</strong></td><td>完整描述逻辑，表达力强（全量公理 + 限制）</td><td>可判定但可能很慢（EXPTIME 级）</td><td>医学/生物本体（SNOMED、GO 用其变体）</td></tr>
+      <tr><td><strong>OWL RL</strong></td><td>面向规则的子集：公理都可改写成「if-then」规则</td><td>多项式，可流式推理</td><td><strong>工业 KG 的事实补全</strong>—— Semantica 的 Rete/前向链推理（第 7 章）走的就是这个思路</td></tr>
+      <tr><td><strong>OWL EL</strong></td><td>面向大规模类层级：只要 subClassOf 类构造</td><td>多项式且对大本体友好</td><td>巨型医学术语库（SNOMED CT）</td></tr>
+      <tr><td><strong>OWL Full</strong></td><td>不限构造，类可以是实例</td><td><strong>不可判定</strong></td><td>研究；生产几乎不用</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    给你一个工程直觉：<strong>「多少公理」是可以谈预算的</strong>。项目起步时用 RDFS + 少量 OWL RL
+    公理（传递、domain/range），推理用规则引擎就能跑；真有医学级需求再上 DL 推理机
+    （HermiT、Pellet 这类基于 tableau 算法的 Java 推理机）。Semantica 的选择是前者——它的推理模块
+    （前向链、Rete、Datalog）都是<strong>确定性规则推理</strong>，不依赖外部推理机服务；
+    本体文档里提到第 6 阶段「符号验证（HermiT/Pellet）」，那部分实际怎么实现的，第 8 章精读源码时会
+    对着代码验证——先卖个关子：文档和实现之间有值得注意的落差。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-serialization">2.5 序列化：同一张图，多种皮肤</h2>
+
+  <p>
+    最后一个基础概念：<strong>三元组集合（图）</strong>与<strong>序列化格式</strong>是两回事。
+    同一张图可以写成四种常见格式，彼此<strong>完全等价</strong>、可无损互转：
+  </p>
+
+  <table>
+    <thead><tr><th>格式</th><th>长相</th><th>什么时候用</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Turtle</strong>（.ttl）</td><td>前缀 + 缩写，人类最可读</td><td>日常读写本体；<strong>Semantica 的默认输出</strong></td></tr>
+      <tr><td><strong>RDF/XML</strong></td><td>XML 标签嵌套，啰嗦</td><td>老系统交换（W3C 最早标准）</td></tr>
+      <tr><td><strong>JSON-LD</strong></td><td>JSON + <code>@context</code> 把键映射成 IRI</td><td>Web/JS 生态、API 传输</td></tr>
+      <tr><td><strong>N-Triples</strong></td><td>每行一条完整三元组，无缩写</td><td>流式处理、diff、大数据量导出</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    对应到代码：<code>OWLGenerator._generate_with_rdflib()</code> 最后的序列化分支
+    （<code>owl_generator.py:319-328</code>）就是 <code>g.serialize(format="turtle" | "xml" | "json-ld" | "n3")</code>
+    ——rdflib 一个 Graph 对象，换 format 参数就换皮肤。第 12 章讲导出时你会看到同一模式贯穿
+    <code>semantica.export.RDFExporter</code>。
+  </p>
+
+  <pre><code># 同一个事实，四种皮肤（内容完全等价）：
+# Turtle
+ex:alice ex:worksFor ex:acme .
+
+# N-Triples（无前缀，全部展开）
+&lt;https://example.org/alice&gt; &lt;https://example.org/worksFor&gt; &lt;https://example.org/acme&gt; .
+
+# JSON-LD（@context 负责把短名映射回 IRI）
+{ "@context": {"worksFor": "https://example.org/worksFor"},
+  "@id": "https://example.org/alice", "worksFor": {"@id": "https://example.org/acme"} }
+
+# RDF/XML（略——最啰嗦的那种，知道存在即可）</code></pre>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">2.6 本章回顾</h2>
+  <ul>
+    <li><strong>RDFS</strong> 五谓语：<code>rdf:type</code>、<code>subClassOf</code>、<code>subPropertyOf</code>、
+        <code>domain</code>、<code>range</code>；自带推理规则（类型上传、传递、domain/range 归属）。</li>
+    <li><strong>domain/range 是推理规则不是校验约束</strong>——错误的用法会「推出」事实而不是被拒绝；
+        校验要靠 SHACL（下一章）。</li>
+    <li><strong>OWL</strong> 属性三分：ObjectProperty（资源→资源）、DatatypeProperty（资源→字面量）、
+        AnnotationProperty（元数据）；公理覆盖等价、互斥、传递/对称/函数性、基数、sameAs。</li>
+    <li>公理组合能<strong>发现矛盾</strong>（disjointWith + 两个来源的类型冲突）——跨源一致性的理论根基。</li>
+    <li><strong>子语言是预算</strong>：OWL RL（规则可算、工业 KG 主流）&lt; OWL DL（强但贵）&lt; OWL Full（不可判定）。
+        Semantica 选择规则推理路线。</li>
+    <li><strong>图 ≠ 序列化</strong>：Turtle / RDF-XML / JSON-LD / N-Triples 完全等价；
+        Semantica 默认 Turtle，rdflib 一个调用换格式。</li>
+    <li>Semantica 的 <code>OWLGenerator</code> 实际输出 <strong>OWL 类 + RDFS 层级 + domain/range + 属性三分</strong>，
+        高阶公理不在自动生成主路径上——「支持 OWL」要问子集。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>把 domain/range 当外键约束用</strong>——期望脏数据被拒绝，实际得到「被推出错误类型」的更多事实。</li>
+      <li><strong>rdfs:subClassOf 写成环</strong>（A ⊑ B ⊑ A）——RDFS 推理会把 A、B 变成逻辑等价类而不是报错；
+          Semantica 的层级构建专门做了 DFS 环检测（第 9 章）。</li>
+      <li><strong>混用 ObjectProperty 和 DatatypeProperty</strong>——把字面量接到 ObjectProperty 上在 OWL DL 里是不合法图。
+          Semantica 靠属性推断时的宾语类型判断走哪支（第 9 章）。</li>
+      <li><strong>以为必须用 OWL Full 才「完整」</strong>——Full 不可判定；生产默认从 RL/EL 起步。</li>
+      <li><strong>把 Turtle 当成「另一种 JSON」</strong>—— Turtle 的 <code>;</code> <code>,</code> 是缩写糖，
+          解析后每条都是独立三元组；图才是本体。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="2">
+    <h2>第 2 章测试</h2>
+
+    <div class="q" data-id="2-1" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— RDFS 的 domain 是推理规则：用了 worksFor 就推出 x rdf:type Person，不报错不拒绝。"
+         data-rationale="RDFS 是开放世界下的推理语言，不是校验语言。A/C 都是「拒绝/报错」的封闭世界直觉；B 无中生有（domain 推主语类型，不推宾语）。要做形状校验需要 SHACL（第 3 章）。"
+         data-review="sec-rdfs">
+      <div class="prompt"><span class="qnum">Q1.</span> 已声明 <code>ex:worksFor rdfs:domain ex:Person</code>，然后写入 <code>ex:toaster ex:worksFor ex:acme</code>。RDFS 推理机会怎么做？</div>
+      <label class="opt"><input type="radio" name="q-2-1" value="a"> A. 拒绝写入：toaster 不是 Person</label>
+      <label class="opt"><input type="radio" name="q-2-1" value="b"> B. 推出 ex:acme rdf:type ex:Person</label>
+      <label class="opt"><input type="radio" name="q-2-1" value="c"> C. 抛出校验错误并回滚</label>
+      <label class="opt"><input type="radio" name="q-2-1" value="d"> D. 推出 ex:toaster rdf:type ex:Person</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-2" data-type="mcq" data-multiselect="true" data-correct='["b","c","e"]'
+         data-answer="B、C、E。A 和 D 需要额外公理（类型上传需要 subClassOf，domain 归属需要 domain 公理），仅凭已给三元组推不出来。"
+         data-rationale="纯 subClassOf 链推理：carol 是 Manager 的实例（B）；Manager ⊑ Employee 传递（C）；CTO ⊑ Manager ⊑ Employee 链式传递（E）。A 错——alice 的 type 是 CTO，已是链的最底端，没有更多可传；D 错——没有任何 worksFor 三元组，更没有 domain 公理。"
+         data-review="sec-rdfs">
+      <div class="prompt"><span class="qnum">Q2.</span> 已知：<code>:CTO rdfs:subClassOf :Manager</code>、<code>:Manager rdfs:subClassOf :Employee</code>、<code>:alice rdf:type :CTO</code>、<code>:carol rdf:type :Manager</code>。仅凭 RDFS 推理，以下哪些一定能推出？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-2-2" value="a"> A. <code>:alice rdf:type :CTO</code> 之外还能推出 alice 是某个新类</label>
+      <label class="opt"><input type="checkbox" name="q-2-2" value="b"> B. <code>:carol rdf:type :Manager</code>（已给出）说明 carol 是 Manager 的直接实例</label>
+      <label class="opt"><input type="checkbox" name="q-2-2" value="c"> C. <code>:carol rdf:type :Employee</code></label>
+      <label class="opt"><input type="checkbox" name="q-2-2" value="d"> D. <code>:alice :worksFor :acme</code> ⇒ <code>:alice rdf:type :Person</code></label>
+      <label class="opt"><input type="checkbox" name="q-2-2" value="e"> E. <code>:alice rdf:type :Employee</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-3" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— DatatypeProperty：宾语是字面量（xsd:string）的属性。"
+         data-rationale="hasTitle 的取值 "CTO" 是字符串字面量 → owl:DatatypeProperty。ObjectProperty 的宾语必须是资源；AnnotationProperty 用于 rdfs:label/comment 这类不参与推理的元数据。Semantica 的 OWLGenerator 正是按宾语类型走 object/datatype 两支生成（owl_generator.py:267-316）。"
+         data-review="sec-owl">
+      <div class="prompt"><span class="qnum">Q3.</span> 属性 <code>hasTitle</code>（取值如 "CTO"）应该声明为 OWL 的哪类属性？</div>
+      <label class="opt"><input type="radio" name="q-2-3" value="a"> A. owl:ObjectProperty</label>
+      <label class="opt"><input type="radio" name="q-2-3" value="b"> B. owl:DatatypeProperty</label>
+      <label class="opt"><input type="radio" name="q-2-3" value="c"> C. owl:AnnotationProperty</label>
+      <label class="opt"><input type="radio" name="q-2-3" value="d"> D. 三类都可以，无区别</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-4" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— disjointWith 是互斥公理：矛盾检测的基石，能发现「两条数据各自正确、合起来冲突」的情况。"
+         data-rationale="A 只是层级（各自可同时成立）；B 是等价（两个类型合一，不矛盾）；D 是属性特征与类互斥无关。disjointWith + dave 同时是 Manager 和 Intern ⇒ 推出 owl:Nothing（矛盾）。这正是跨来源逻辑冲突检测的理论基础。"
+         data-review="sec-owl">
+      <div class="prompt"><span class="qnum">Q4.</span> 两个数据源对同一人给出了矛盾的职位类型。哪条 OWL 公理能让推理机发现「逻辑矛盾」？</div>
+      <label class="opt"><input type="radio" name="q-2-4" value="a"> A. <code>Manager rdfs:subClassOf Employee</code></label>
+      <label class="opt"><input type="radio" name="q-2-4" value="b"> B. <code>Manager owl:equivalentClass Exec</code></label>
+      <label class="opt"><input type="radio" name="q-2-4" value="c"> C. <code>Manager owl:disjointWith Intern</code></label>
+      <label class="opt"><input type="radio" name="q-2-4" value="d"> D. <code>knows rdf:type owl:SymmetricProperty</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-5" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— OWL RL：公理都能改写成 if-then 规则，多项式时间可推理，适合规则引擎（Rete/前向链）做事实补全。"
+         data-rationale="OWL Full 不可判定（A 排除）；OWL DL 表达力强但 tableau 推理代价高，适合医学本体这类重领域（C）；EL 面向巨型类层级术语库（D）。工业 KG 常态是海量实例 + 需要流式规则推理 ⇒ RL。Semantica 的推理模块（Rete/前向链/Datalog）正是规则路线。"
+         data-review="sec-profiles">
+      <div class="prompt"><span class="qnum">Q5.</span> 一个工业知识图谱项目：千万级实例、需要用规则引擎持续做事实补全、推理必须快且可判定。选哪个 OWL 子语言起步？</div>
+      <label class="opt"><input type="radio" name="q-2-5" value="a"> A. OWL Full</label>
+      <label class="opt"><input type="radio" name="q-2-5" value="b"> B. OWL RL</label>
+      <label class="opt"><input type="radio" name="q-2-5" value="c"> C. OWL DL</label>
+      <label class="opt"><input type="radio" name="q-2-5" value="d"> D. 直接上 HermiT 推理机 + OWL DL 全量公理</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-6" data-type="fill" data-accepted='["turtle","ttl","turtle（.ttl）","turtle (.ttl)"]'
+         data-answer="Turtle（.ttl 文件）。"
+         data-rationale="Turtle 人类可读性最好，是本体日常读写的事实标准，也是 Semantica OWLGenerator/RDFExporter 的默认输出格式（default_format='turtle'）。"
+         data-review="sec-serialization">
+      <div class="prompt"><span class="qnum">Q6.</span> 填空：人类可读性最好、Semantica 默认输出的 RDF 序列化格式是 ______。</div>
+      <input type="text" class="fill" placeholder="格式名">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-7" data-type="fill" data-accepted='["rdfs:subClassOf","subClassOf","rdfs:subclassof"]'
+         data-answer="rdfs:subClassOf"
+         data-rationale="类层级谓语。它有传递性且触发类型上传：x rdf:type C 且 C ⊑ D ⇒ x rdf:type D。属性层级对应的是 rdfs:subPropertyOf。"
+         data-review="sec-rdfs">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：声明「Manager 是 Employee 的子类」的 RDFS 谓语是 ______。</div>
+      <input type="text" class="fill" placeholder="带前缀的完整谓语">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-8" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 它输出的核心是 owl:Class + rdfs:subClassOf + domain/range + ObjectProperty/DatatypeProperty 三分；高阶公理不在自动生成主路径上。"
+         data-rationale="对照 owl_generator.py:243-316：生成的是 RDF.type OWL.Class、RDFS.subClassOf、Object/DatatypeProperty 与 domain/range。disjointWith、传递性、基数等高阶公理（A/B/D 提到的）需要人工或 LLMOntologyGenerator 补充。「文档说支持 OWL」≠「自动生成全部 OWL」——这是读文档要养成的习惯。"
+         data-review="sec-owl-in-semantica">
+      <div class="prompt"><span class="qnum">Q8.</span> 关于 Semantica 的 <code>OWLGenerator</code> 主生成路径，以下说法与源码一致的是？</div>
+      <label class="opt"><input type="radio" name="q-2-8" value="a"> A. 它自动生成 disjointWith 互斥公理</label>
+      <label class="opt"><input type="radio" name="q-2-8" value="b"> B. 它自动为每个属性生成基数限制</label>
+      <label class="opt"><input type="radio" name="q-2-8" value="c"> C. 它生成 OWL 类、RDFS 层级、domain/range 与两类属性的区分；不自动生成高阶公理</label>
+      <label class="opt"><input type="radio" name="q-2-8" value="d"> D. 它只输出 JSON-LD，不支持 Turtle</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-9" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 完全等价：序列化只是图的外衣，互相可无损转换。"
+         data-rationale="RDF 的数据模型是三元组集合（图）；Turtle/JSON-LD/N-Triples/RDF-XML 只是同一张图的不同编码。rdflib 里就是同一个 Graph 对象换 serialize(format=...)（owl_generator.py:319-328）。B/C/D 都把外衣当成了内容。"
+         data-review="sec-serialization">
+      <div class="prompt"><span class="qnum">Q9.</span> 同一张知识图谱分别导出为 Turtle 和 JSON-LD，两个文件的关系是？</div>
+      <label class="opt"><input type="radio" name="q-2-9" value="a"> A. 语义完全等价，可无损互转</label>
+      <label class="opt"><input type="radio" name="q-2-9" value="b"> B. JSON-LD 丢失前缀信息，所以不等价</label>
+      <label class="opt"><input type="radio" name="q-2-9" value="c"> C. Turtle 只能表达 OWL，JSON-LD 只能表达 RDFS</label>
+      <label class="opt"><input type="radio" name="q-2-9" value="d"> D. N-Triples 是唯一无损格式，其余都有损</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="2-10" data-type="short"
+         data-key-points='["RDFS 五谓语（type/subClassOf/subPropertyOf/domain/range）及其推理规则","domain/range 是加事实的推理规则而非校验（校验靠 SHACL）","OWL 属性三分：Object/Datatype/Annotation","OWL 高阶公理（disjoint/equivalent/transitive/functional/基数）能推出隐含事实、发现矛盾","子语言（RL/DL/EL/Full）是表达力与推理成本的权衡，工业 KG 常用 RL","图与序列化分离：Turtle/JSON-LD/N-Triples/RDF-XML 等价互转"]'
+         data-answer="RDFS 提供类层级与属性归属的五个谓语，且自带推理：类型上传、subClassOf 传递、domain/range 归属——注意 domain/range 是「加事实」而非「拒绝数据」，校验要靠 SHACL。OWL 在其上加公理：属性三分（Object/Datatype/Annotation）、等价、互斥、传递/对称/函数性、基数——能推出隐含事实并发现跨源矛盾。子语言是表达力与推理成本的预算：工业 KG 常用 OWL RL（规则可算）。序列化与图分离：同一张图可用 Turtle/JSON-LD/N-Triples/RDF-XML 等价格式表达，Semantica 默认 Turtle。"
+         data-rationale="六个要点覆盖本章主干：RDFS 机制、domain/range 语义、属性三分、公理作用、子语言权衡、序列化等价性。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 用自己的话总结：(1) RDFS 提供了什么、它的推理规则是什么？(2) 为什么说 domain/range 不是校验约束？(3) OWL 比 RDFS 多了什么？(4) 选子语言时在权衡什么？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="03-shacl-skos.html"><strong>SHACL 约束与 SKOS 词表</strong></a>——
+    本体世界里的「数据库约束」和「受控词表」。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

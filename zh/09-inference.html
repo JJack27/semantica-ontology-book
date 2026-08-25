@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 9 章 — 类与属性推断</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 9 章 · 第三部分：ontology 深潜</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="9">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 9 · 第三部分：semantica.ontology 深潜</div>
+    <h1>类与属性推断：ClassInferrer 与 PropertyGenerator</h1>
+    <p class="lede">
+      第 8 章的流水线里有两个被委派出去的黑盒：Stage 2 的 <code>ClassInferrer</code>
+      和 Stage 3 的 <code>PropertyGenerator</code>。本章打开它们——你会发现「自动本体生成」
+      的魔法其实是几条朴素而结实的统计规则：频率门槛、Counter 计数、命名启发式、
+      类型格。也会再次遇到「文档说的算法」与「代码做的算法」的落差：
+      相似度合并与传递闭包，宣传里有，代码里没有。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能完整复述类推断算法：分桶 → 频率门槛（min_occurrences）→ 类定义生成（命名归一 + 50% 公共属性）</li>
+      <li>能解释层级推断的「拆词找父 + 通用父类兜底」启发式，以及 DFS 环检测的必要性</li>
+      <li>能说出 similarity_threshold 参数的真实状态（收下但从未使用）</li>
+      <li>能手工执行属性推断：关系 → ObjectProperty（domain/range 聚合）、实体属性 → DatatypeProperty（XSD 类型格拓宽）</li>
+      <li>能针对具体数据集调整 min_occurrences 并预判本体质量的变化</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-class-inference">9.1 类推断：频率投票决定谁配成为类</h2>
+
+  <p>
+    <code>ClassInferrer.infer_classes()</code>（<code>class_inferrer.py:96</code>）的算法
+    可以用一句话讲完：<strong>按 entity type 分桶数实例，过得了频率门槛的类型升级为类</strong>。
+    核心判断在 158 行：<code>if len(type_entities) >= self.min_occurrences</code>。
+    默认门槛 <code>min_occurrences=2</code>——只出现一次的类型（通常是抽取噪声，
+    比如把 "Money" 金额误标成实体类型）直接出局。
+  </p>
+
+  <div class="demo" data-demo="inferThreshold">
+    <div class="demo-title">动手试 — 频率门槛滑杆</div>
+    <p>固定的一批实体类型计数（Person×8、Organization×5、Contract×2、Money×1、Product×1）。
+       拖动滑杆改变 min_occurrences，看哪些类幸存。</p>
+    <input type="range" min="1" max="5" value="2" style="width:100%">
+    <div class="demo-output empty">拖动滑杆。</div>
+  </div>
+
+  <p>
+    过了门槛的类型由 <code>_create_class_from_entities()</code>（253 行）铸成类定义，三个动作：
+  </p>
+
+  <ol>
+    <li><strong>命名归一</strong>：<code>naming_conventions.normalize_class_name(entity_type)</code>——
+        第 4 章的命名纪律在这里自动执行（如 "contract party" → "ContractParty"）；</li>
+    <li><strong>公共属性提取</strong>（278–302 行）：用 <code>Counter</code> 统计实体 dict 的键
+        （排除 id/type/text 等元键），只保留<strong>至少 50% 实体都有</strong>的键——
+        偶发字段不进类定义；</li>
+    <li><strong>记谱</strong>：<code>entity_count</code> 和 <code>metadata.inferred_from</code>——
+        类的出身可追溯（呼应第 4 章「决策留痕」的方法论）。</li>
+  </ol>
+
+  <p>
+    一处必须指出的细节（第 8 章 #1103 的源头）：266–268 行在没有 namespace_manager 时把
+    <code>"uri"</code> 设为 <code>None</code>——键存在但值为假， downstream 的
+    <code>not in</code> 守卫因此失效。修好之后 Stage 3 的兜底（<code>if not cls.get("uri")</code>）
+    挡住了它，但你读代码时应该能认出这种「潜伏字段」。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-hierarchy">9.2 层级推断：拆词启发式与环检测</h2>
+
+  <p>
+    <code>build_class_hierarchy()</code>（184 行）给扁平类列表装 <code>subClassOf</code>。
+    亲子关系从哪来？<code>_find_parent_class()</code>（304–323 行）是个诚实的朴素启发式：
+  </p>
+
+  <pre><code># 伪码还原（:309-323）
+words = class_name.split()                       # "Contract Party" → ["Contract", "Party"]
+for i in range(len(words)-1, 0, -1):             # 从去掉最后一个词开始试
+    if "".join(words[:i]) in class_map:          # "Contract" 恰好是个已存在的类？
+        return "Contract"                        # → 认作父类
+for parent in ["Entity", "Thing", "Resource"]:   # 兜底：通用父类
+    if parent in class_map: return parent
+return None                                      # 没有父类 → 顶层类</code></pre>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 文档 vs 代码：相似度合并与传递闭包，宣传里有、代码里没有</div>
+    <p style="margin:.3rem 0;">
+      <code>ontology/__init__.py</code> 的模块 docstring 宣称层级构建包含
+      「<strong>similarity-based class merging (threshold matching)</strong>」和
+      「<strong>transitive closure calculation</strong>」；构造函数也确实收
+      <code>similarity_threshold=0.8</code> 参数（:94 赋值给 self）。
+      但全文搜索的结果：<strong>similarity_threshold 在赋值之后从未被引用</strong>，
+      「transitive」「closure」字样在 class_inferrer.py 里一次都不出现。
+      真实的层级推断就是上面的拆词启发式。<code>similarity_threshold</code> 目前是
+      <strong>装饰性参数</strong>——改它不会有任何效果。给 repo 提 PR 的好机会（第 13 章会再提）。
+    </p>
+  </div>
+
+  <p>
+    启发式虽朴素，<strong>环检测是动真格的</strong>：<code>_check_circular_hierarchy()</code>
+    （379 行起）建 parent_map 后跑 DFS（395 行的嵌套 <code>has_cycle</code> 函数，带 visiting 集合防重入），
+    A ⊑ B ⊑ A 这种循环继承会被抓出来报 error。为什么必须：RDFS 的 subClassOf 推理是传递的
+    （第 2 章），一个环会让环上所有类逻辑等价——你的类层级瞬间「降维」。第 3 章的 SKOS 层级环检测
+    （utils/skos.py）是同一防御的词表版。
+  </p>
+
+  <p>
+    完整的 <code>validate_classes()</code>（325–377 行）查三样：重名类（Counter 计数，error）、
+    命名规范（warning + 建议名）、循环层级（error）。错误和警告分级返回——与第 3 章 SHACL 的
+    Violation/Warning 分档如出一辙。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-property-inference">9.3 对象属性推断：从关系的两端聚合 domain/range</h2>
+
+  <p>
+    <code>PropertyGenerator._infer_object_properties()</code>
+    （<code>property_generator.py:133</code>）把第 6 章抽取出的<strong>关系</strong>变成
+    ObjectProperty。算法依然是聚合统计：按 <code>relationship type</code> 分组，
+    每组收集<strong>所有出现过的 source 类型 → domain 集合</strong>、
+    <strong>所有出现过的 target 类型 → range 集合</strong>：
+  </p>
+
+  <pre><code># :152-185（节选）
+domains, ranges = set(), set()
+for rel in rels_of_this_type:
+    domains.add(rel.source_type)     # works_for 的主语见过 Person、Consultant…
+    ranges.add(rel.target_type)      #           宾语见过 Organization…
+
+property_def = {
+    "name": "worksFor", "type": "object",
+    "domain": list(domains) if domains else ["owl:Thing"],   # 空则兜底 owl:Thing
+    "range":  list(ranges)  if ranges  else ["owl:Thing"],
+}</code></pre>
+
+  <p>
+    这正是第 2 章 domain/range 公理的数据驱动版：<strong>不是谁规定的 worksFor 连接
+    Person 和 Organization，而是数据里每次出现都这么连</strong>。两个推论：
+    domain/range 可能是<strong>多值</strong>的（一个谓语见过多种主语类型）——OWL 完全允许；
+    数据脏（第 8 章 Stage 1 的 "Entity" 兜底）会让 domain 变成
+    <code>["Person", "Entity"]</code> 这种泥沙俱下的集合。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-data-properties">9.4 数据属性推断：XSD 类型格与拓宽规则</h2>
+
+  <p>
+    <code>_extract_data_properties()</code>（245 行）扫描实体的属性字段（排除元键），
+    交给 <code>_infer_property_type()</code>（269–286 行）按<strong>类型格</strong>映射：
+  </p>
+
+  <table>
+    <thead><tr><th>Python 值</th><th>XSD 类型</th></tr></thead>
+    <tbody>
+      <tr><td><code>True/False</code></td><td><code>xsd:boolean</code></td></tr>
+      <tr><td><code>42</code></td><td><code>xsd:integer</code></td></tr>
+      <tr><td><code>3.14</code></td><td><code>xsd:double</code></td></tr>
+      <tr><td>匹配日期正则的字符串</td><td><code>xsd:date</code></td></tr>
+      <tr><td>匹配日期时间正则的字符串</td><td><code>xsd:dateTime</code></td></tr>
+      <tr><td>其余一切</td><td><code>xsd:string</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    精妙处在 <code>_get_more_general_type()</code>（309 行）：同一属性在不同实体上类型不一致时
+    （salary 有处是 int 有处是 float），沿格<strong>向上拓宽</strong>——
+    <code>boolean &lt; integer &lt; double &lt; date &lt; dateTime &lt; string</code>，
+    直到装得下所有观测值（最宽到 string）。类型格的偏序设计让「合并冲突类型」变成一次 max 运算。
+    这是本书第一次遇到<strong>格（lattice）</strong>结构——推理系统里的常客，记住这个形状。
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="XSD 类型拓宽格">
+      <text style="fill:var(--fg)" x="360" y="26" text-anchor="middle" font-size="13" font-weight="700">XSD 类型格（沿箭头向上拓宽）</text>
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="310" y="40" width="100" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="360" y="63" text-anchor="middle" font-size="12" font-weight="700">xsd:string</text>
+
+      <line style="stroke:var(--muted)" x1="360" y1="76" x2="360" y2="98" stroke-width="2"/><polygon style="fill:var(--muted)" points="360,98 356,90 364,90"/>
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="290" y="100" width="140" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="360" y="123" text-anchor="middle" font-size="12" font-weight="700">xsd:dateTime</text>
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="470" y="100" width="120" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="530" y="123" text-anchor="middle" font-size="12" font-weight="700">xsd:date</text>
+
+      <line style="stroke:var(--muted)" x1="360" y1="136" x2="360" y2="152" stroke-width="2"/><polygon style="fill:var(--muted)" points="360,152 356,144 364,144"/>
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="40" y="100" width="90" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="85" y="123" text-anchor="middle" font-size="12" font-weight="700">xsd:double</text>
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="150" y="100" width="100" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="200" y="123" text-anchor="middle" font-size="12" font-weight="700">xsd:integer</text>
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="150" y="40" width="100" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="200" y="63" text-anchor="middle" font-size="12" font-weight="700">xsd:boolean</text>
+      <line style="stroke:var(--muted)" x1="200" y1="76" x2="200" y2="98" stroke-width="2"/><polygon style="fill:var(--muted)" points="200,98 196,90 204,90"/>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="40" y="40" width="100" height="36" rx="8" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="90" y="56" text-anchor="middle" font-size="11" font-weight="700">salary: 30000</text>
+      <text style="fill:var(--fg-dim)" x="90" y="70" text-anchor="middle" font-size="9">xsd:integer</text>
+
+      <text style="fill:var(--fg-dim)" x="620" y="110" text-anchor="middle" font-size="10">另见 salary: 2500.5</text>
+      <text style="fill:var(--warn)" x="620" y="126" text-anchor="middle" font-size="10">合并 → integer ∨ double</text>
+      <text style="fill:var(--fail)" x="620" y="142" text-anchor="middle" font-size="10">= xsd:double</text>
+    </svg>
+    <figcaption>类型拓宽格（property_generator.py:309 的 _get_more_general_type）：
+    冲突类型沿偏序上取最小上界。boolean 最特化，string 最宽（万能兜底）。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-quality">9.5 推断质量：三条调参心得</h2>
+
+  <ul>
+    <li><strong>min_occurrences 是精度/召回旋钮</strong>：调高→噪声类出局但稀有真类（Contract?）陪葬；
+        调低→本体膨胀。经验：先看「只有 1–2 个实例的类型」名单再定阈值，别盲调。</li>
+    <li><strong>上游质量决定一切</strong>：domain 聚合和 "Entity" 兜底直接挂钩。
+        抽取置信度阈值（第 6 章 NamedEntityRecognizer 的 0.7）是本体质量的第一道闸。</li>
+    <li><strong>导出前必跑 validate_classes</strong>：重名/环/命名三类问题在 dict 阶段修复成本最低；
+        一旦进了 Turtle 再改，就是 RDF 图手术。</li>
+  </ul>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">9.6 本章回顾</h2>
+  <ul>
+    <li><strong>类推断</strong> = 分桶 + 频率门槛（min_occurrences=2，class_inferrer.py:158）+
+        命名归一 + 50% 公共属性提取（Counter）；类的出身记在 metadata。</li>
+    <li><strong>层级推断</strong> = 拆词找父启发式 + Entity/Thing/Resource 兜底（:304-323）；
+        <strong>similarity_threshold 收而不用</strong>，宣传的相似度合并/传递闭包代码里不存在。</li>
+    <li><strong>环检测动真格</strong>：DFS + visiting 集合（:395）抓循环继承——subClassOf 传递性下
+        一个环让全环类等价。</li>
+    <li><strong>对象属性推断</strong>：按关系类型分组，domain=出现过的 source 类型集合、
+        range=出现过的 target 类型集合，空则 owl:Thing（property_generator.py:152-185）。</li>
+    <li><strong>数据属性推断</strong>：值类型 → XSD 类型格（boolean&lt;integer&lt;double&lt;date&lt;dateTime&lt;string），
+        冲突时向上取最小上界（:309）——格结构第一次登场。</li>
+    <li>质量三心得：阈值看名单再调；上游置信度是第一道闸；导出前 validate_classes。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>调 similarity_threshold 期望改变合并行为</strong>——装饰性参数，无任何效果。</li>
+      <li><strong>指望层级推断有语义理解</strong>——它只认名字里的词，"Employee" 不会自动成为
+          "Person" 的子类（词不包含）。语义层级要靠复用外部本体（第 11 章 ReuseManager）或人工。</li>
+      <li><strong>min_occurrences=1</strong>——抽取噪声全体升格为类，本体变成类型垃圾桶。</li>
+      <li><strong>把多值 domain 当 bug 修</strong>——OWL 允许多 domain；真问题是里面混了 "Entity" 泥沙，
+          修上游而不是删值。</li>
+      <li><strong>跳过 validate_classes 直接导出</strong>——环和重名在 Turtle 里修复成本翻十倍。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="9">
+    <h2>第 9 章测试</h2>
+
+    <div class="q" data-id="9-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 频率门槛：按 entity type 分桶数实例，类型出现次数 ≥ min_occurrences（默认 2）才升级为类。"
+         data-rationale="没有语义嵌入（A）、没有调用 LLM（C）、没有预置模板匹配（D）——核心就是 Counter 统计 + 门槛判断（class_inferrer.py:96-158）。朴素但可解释、可调参，这正是「确定性」路线的审美。"
+         data-review="sec-class-inference">
+      <div class="prompt"><span class="qnum">Q1.</span> ClassInferrer 决定「哪个类型成为类」的核心机制是？</div>
+      <label class="opt"><input type="radio" name="q-9-1" value="a"> A. 语义嵌入聚类</label>
+      <label class="opt"><input type="radio" name="q-9-1" value="b"> B. 频率门槛：类型出现次数 ≥ min_occurrences（默认 2）</label>
+      <label class="opt"><input type="radio" name="q-9-1" value="c"> C. LLM 判断该类型是否重要</label>
+      <label class="opt"><input type="radio" name="q-9-1" value="d"> D. 与预置领域模板匹配</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-2" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 50% 规则：属性在至少一半实体上出现才进类定义（class_inferrer.py:297）。"
+         data-rationale="_extract_common_properties 用 Counter 统计后按 len(entities)*0.5 的门槛过滤——偶发字段被挡在类定义外，保持类定义代表「该类的典型形状」。"
+         data-review="sec-class-inference">
+      <div class="prompt"><span class="qnum">Q2.</span> 一个实体的属性字段要进入类定义，需要满足什么出现频率？</div>
+      <label class="opt"><input type="radio" name="q-9-2" value="a"> A. 至少出现一次</label>
+      <label class="opt"><input type="radio" name="q-9-2" value="b"> B. 全部实体都有（100%）</label>
+      <label class="opt"><input type="radio" name="q-9-2" value="c"> C. 至少 50% 的实体有该属性</label>
+      <label class="opt"><input type="radio" name="q-9-2" value="d"> D. 由 LLM 逐个判断</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-3" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 拆词启发式：去掉名字末尾的词，剩下的若恰是已有类则认作父类；再不行兜底 Entity/Thing/Resource。"
+         data-rationale="_find_parent_class（304-323）纯命名模式，无语义计算。B/C/D 都不存在于代码——尤其注意 B：模块 docstring 宣传过 similarity-based merging，但 similarity_threshold 参数收而不用（第 9.2 节的文档 vs 代码之辨）。"
+         data-review="sec-hierarchy">
+      <div class="prompt"><span class="qnum">Q3.</span> "ContractParty" 这个类会被推断出什么父类（假设 class_map 里有 Contract 和 Entity）？</div>
+      <label class="opt"><input type="radio" name="q-9-3" value="a"> A. Contract（去掉 Party 后命中已有类）</label>
+      <label class="opt"><input type="radio" name="q-9-3" value="b"> B. Person（语义上 Party 是人）</label>
+      <label class="opt"><input type="radio" name="q-9-3" value="c"> C. Organization（词向量最近）</label>
+      <label class="opt"><input type="radio" name="q-9-3" value="d"> D. 没有父类（启发式失效）</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-4" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— 无效参数：赋值后全文未被引用，改它没有任何效果。"
+         data-rationale="grep 全文只在 :58（示例）、:71（docstring）、:94（赋值）出现。宣传中的 similarity-based class merging 与 transitive closure 在 class_inferrer.py 中不存在。这是又一个「API 面子、占位里子」案例，也是潜在 PR 机会。"
+         data-review="sec-hierarchy">
+      <div class="prompt"><span class="qnum">Q4.</span> 把 ClassInferrer(similarity_threshold=0.95) 的阈值从 0.8 调到 0.95，会发生什么？</div>
+      <label class="opt"><input type="radio" name="q-9-4" value="a"> A. 类合并更激进，类数变少</label>
+      <label class="opt"><input type="radio" name="q-9-4" value="b"> B. 类合并更保守，类数变多</label>
+      <label class="opt"><input type="radio" name="q-9-4" value="c"> C. 抛出参数校验错误</label>
+      <label class="opt"><input type="radio" name="q-9-4" value="d"> D. 什么都不会发生——该参数收而不用</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-5" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— subClassOf 传递性下，环上所有类逻辑等价，层级退化；DFS 环检测在生成期拦住它。"
+         data-rationale="第 2 章的推理规则（传递 + 类型上传）决定了环的破坏力：A⊑B⊑A ⇒ A≡B。_check_circular_hierarchy（:379）用带 visiting 集合的 DFS 抓环，与第 3 章 SKOS 词表的环检测同一防御思想。A/B 是其他真问题但非环检测存在的理由；D 无关系。"
+         data-review="sec-hierarchy">
+      <div class="prompt"><span class="qnum">Q5.</span> 为什么循环继承（A ⊑ B ⊑ A）必须被检测拦截？</div>
+      <label class="opt"><input type="radio" name="q-9-5" value="a"> A. 会让 Turtle 序列化失败</label>
+      <label class="opt"><input type="radio" name="q-9-5" value="b"> B. 会造成无限循环崩溃</label>
+      <label class="opt"><input type="radio" name="q-9-5" value="c"> C. subClassOf 传递性使环上所有类逻辑等价，类层级退化</label>
+      <label class="opt"><input type="radio" name="q-9-5" value="d"> D. 会触发 SHACL 校验错误</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-6" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— domain = 出现过的所有 source 类型集合；range = 出现过的所有 target 类型集合；空则 owl:Thing。"
+         data-rationale="_infer_object_properties（property_generator.py:152-185）按关系类型分组聚合端点类型。domain 多值是正常且合法的 OWL 用法；如果里面混着 "Entity"，说明第 8 章 Stage 1 的兜底被触发——修上游。"
+         data-review="sec-property-inference">
+      <div class="prompt"><span class="qnum">Q6.</span> works_for 关系在数据里连接过 Person→Organization 和 Consultant→Organization。推断出的 domain 是？</div>
+      <label class="opt"><input type="radio" name="q-9-6" value="a"> A. 仅 Person（取第一个）</label>
+      <label class="opt"><input type="radio" name="q-9-6" value="b"> B. [Person, Consultant]（所有出现过的 source 类型）</label>
+      <label class="opt"><input type="radio" name="q-9-6" value="c"> C. owl:Thing（无法确定）</label>
+      <label class="opt"><input type="radio" name="q-9-6" value="d"> D. 两个 domain 各建一个属性</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-7" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— xsd:double：integer 与 double 冲突时沿类型格向上取最小上界。"
+         data-rationale="_get_more_general_type（:309）的偏序：boolean &lt; integer &lt; double &lt; date &lt; dateTime &lt; string。int 与 float 的最小上界是 double。这是格（lattice）运算在代码中的朴素化身。"
+         data-review="sec-data-properties">
+      <div class="prompt"><span class="qnum">Q7.</span> salary 属性有的实体上是整数、有的是浮点数。合并后的推断类型是？</div>
+      <label class="opt"><input type="radio" name="q-9-7" value="a"> A. xsd:double</label>
+      <label class="opt"><input type="radio" name="q-9-7" value="b"> B. xsd:integer</label>
+      <label class="opt"><input type="radio" name="q-9-7" value="c"> C. xsd:string</label>
+      <label class="opt"><input type="radio" name="q-9-7" value="d"> D. 报类型冲突错误</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-8" data-type="fill" data-accepted='["2","两","两个","2 次","两次"]'
+         data-answer="2（min_occurrences 默认值）。"
+         data-rationale="class_inferrer.py:93 的默认 min_occurrences=2——只出现一次的类型（多为抽取噪声）不配成为类。数据稀疏时可调低，但要看「只出现 1-2 次的类型」名单再决定。"
+         data-review="sec-class-inference">
+      <div class="prompt"><span class="qnum">Q8.</span> 填空：类型至少出现 ______ 次才会被 ClassInferrer 升级为类（默认值）。</div>
+      <input type="text" class="fill" placeholder="数字">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-9" data-type="mcq" data-multiselect="true" data-correct='["b","d"]'
+         data-answer="B（命名规范 warning + 建议名）和 D（重名类 error）。A 的环检测也是 error 但表述成 warning 不对；C 是 SHACL 的活。"
+         data-rationale="validate_classes（:325-377）三查：重名（Counter，error）、命名规范（warning+suggestion）、循环层级（error，DFS）。类型/取值约束校验属于 SHACL 路线（第 3/10 章）。"
+         data-review="sec-hierarchy">
+      <div class="prompt"><span class="qnum">Q9.</span> validate_classes() 会报告以下哪些问题？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-9-9" value="a"> A. 循环层级（以 warning 级别）</label>
+      <label class="opt"><input type="checkbox" name="q-9-9" value="b"> B. 类名不符合命名规范（附建议名）</label>
+      <label class="opt"><input type="checkbox" name="q-9-9" value="c"> C. 属性取值超出 sh:in 枚举</label>
+      <label class="opt"><input type="checkbox" name="q-9-9" value="d"> D. 重复类名</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="9-10" data-type="short"
+         data-key-points='["类推断：分桶+频率门槛（min_occurrences=2）+命名归一+50% 公共属性；出身记入 metadata","层级推断：拆词找父启发式+Entity/Thing/Resource 兜底；DFS 环检测防层级退化","similarity_threshold 收而不用；宣传的相似度合并/传递闭包代码中不存在","对象属性：按关系类型聚合 source/target 类型得 domain/range（空则 owl:Thing）；数据属性：XSD 类型格向上拓宽","调参心得：阈值看名单、上游置信度是第一道闸、导出前 validate_classes"]'
+         data-answer="类推断按类型分桶数实例，过 min_occurrences=2 门槛的类型经命名归一成类，并提取 50% 以上实体共有的属性；层级用拆词找父启发式（去掉末词命中已有类即认父，兜底 Entity/Thing/Resource），DFS 环检测拦循环继承（subClassOf 传递性下环使全环类等价）；similarity_threshold 参数收而不用，宣传的相似度合并/传递闭包不存在于代码。对象属性按关系类型聚合端点类型得 domain/range（空兜底 owl:Thing）；数据属性按 XSD 类型格（boolean&lt;integer&lt;double&lt;date&lt;dateTime&lt;string）冲突时向上取最小上界。调参：阈值先看低频类型名单，上游 NER 置信度是第一道闸，导出前必跑 validate_classes。"
+         data-rationale="五个要点：类推断机制、层级启发式与环检测、装饰性参数真相、两类属性推断、调参心得。能复述这些算法并说出它们的边界，你就摸到了这个模块的心脏。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：完整描述类推断与层级推断的算法（含环检测的必要性）；domain/range 如何聚合；XSD 类型如何拓宽；similarity_threshold 的真实状态是什么？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    下一章：<a href="10-shacl-validation.html"><strong>SHACL 生成与验证</strong></a>——
+    从数据长出 shapes（SHACLGenerator），再用真验证器（run_shacl_validation）检验数据。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 4 章 — 本体工程方法论</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 4 章 · 第一部分：领域基础</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="4">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 4 · 第一部分：本体领域基础</div>
+    <h1>本体工程方法论</h1>
+    <p class="lede">
+      前三章你掌握了语言（RDF/RDFS/OWL/SHACL/SKOS）。但语言不等于工程——
+      「会写 Turtle」和「建出一个有用的本体」之间隔着方法论。
+      本章讲领域里沉淀下来的标准姿势：<strong>能力问题驱动、优先复用、命名与粒度纪律、版本化演进</strong>。
+      每一块都对照 Semantica 的对应实现（它们不约而同都长在这个 repo 的 ontology 模块里，不是巧合）。
+      读完这章，第一部分收官，你具备了读第二、三部分所需的全部领域底子。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能为本体项目写出 5–8 条合格的能力问题（Competency Questions），并解释它们如何划定本体边界</li>
+      <li>能执行本体复用决策：调研（FOAF/Dublin Core/Schema.org 等）→ 对齐评估 → reuse / partial / reject 三选一</li>
+      <li>能应用命名规范（类 PascalCase 单数名词、属性 camelCase 动词短语）并说明为什么这种纪律值得自动化</li>
+      <li>能判断一个本体的粒度问题（过粗/过细），并知道「按能力问题够用就好」的原则</li>
+      <li>能说清本体版本化的 IRIS 最佳实践：版本放本体 IRI 里，不污染元素 IRI</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-why-methodology">4.1 为什么本体需要「工程方法」</h2>
+
+  <p>
+    本体项目的死法高度雷同。三种最常见：
+  </p>
+  <ul>
+    <li><strong>过度工程</strong>：团队兴奋地建了一个「关于一切」的本体——三百个类、两千个属性，
+        覆盖了五年后才可能用到的场景。六个月后没人维护，数据一个没进来。领域里叫这个
+        「本体赶超现实」（ontology over-engineering）。</li>
+    <li><strong>范围蔓延</strong>：从「合同管理本体」滑向「法务领域本体」滑向「公司法本体」。
+        没有边界声明的项目必然蔓延。</li>
+    <li><strong>无人使用</strong>：建模的人从没问过消费者——查询的人、下游系统——
+        这个本体到底要支持什么。交付时才发现关键问题答不了。</li>
+  </ul>
+
+  <p>
+    领域先驱们（Uschold &amp; King 的企业本体方法、Gruninger &amp; Fox 的 TOVE 方法、
+    后来 Noy &amp; McGuinness 的「七步法」）给出的解药高度一致，可以浓缩成一个循环：
+  </p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="本体工程方法论循环">
+      <rect style="fill:var(--surface-2);stroke:var(--warn)" x="30" y="40" width="150" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--warn)" x="105" y="70" text-anchor="middle" font-size="13" font-weight="700">1 定范围</text>
+      <text style="fill:var(--fg-dim)" x="105" y="92" text-anchor="middle" font-size="10">领域边界 · 目的声明</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent)" x="220" y="40" width="170" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent)" x="305" y="70" text-anchor="middle" font-size="13" font-weight="700">2 能力问题</text>
+      <text style="fill:var(--fg-dim)" x="305" y="92" text-anchor="middle" font-size="10">本体必须能回答的问题</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="430" y="40" width="130" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="495" y="70" text-anchor="middle" font-size="13" font-weight="700">3 复用调研</text>
+      <text style="fill:var(--fg-dim)" x="495" y="92" text-anchor="middle" font-size="10">先找现成的</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--accent-2)" x="600" y="40" width="90" height="70" rx="10" stroke-width="2"/>
+      <text style="fill:var(--accent-2)" x="645" y="70" text-anchor="middle" font-size="13" font-weight="700">4 建模</text>
+      <text style="fill:var(--fg-dim)" x="645" y="92" text-anchor="middle" font-size="10">类·属性·公理</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--pass)" x="470" y="160" width="220" height="60" rx="10" stroke-width="2"/>
+      <text style="fill:var(--pass)" x="580" y="185" text-anchor="middle" font-size="13" font-weight="700">5 用能力问题验证</text>
+      <text style="fill:var(--fg-dim)" x="580" y="205" text-anchor="middle" font-size="10">答不了就回去改模型</text>
+
+      <rect style="fill:var(--surface-2);stroke:var(--fail)" x="200" y="160" width="220" height="60" rx="10" stroke-width="2"/>
+      <text style="fill:var(--fail)" x="310" y="185" text-anchor="middle" font-size="13" font-weight="700">6 版本化 · 演进 · 记录决策</text>
+      <text style="fill:var(--fg-dim)" x="310" y="205" text-anchor="middle" font-size="10">本体是活的资产</text>
+
+      <line style="stroke:var(--muted)" x1="180" y1="75" x2="218" y2="75" stroke-width="2"/><polygon style="fill:var(--muted)" points="218,75 210,71 210,79"/>
+      <line style="stroke:var(--muted)" x1="390" y1="75" x2="428" y2="75" stroke-width="2"/><polygon style="fill:var(--muted)" points="428,75 420,71 420,79"/>
+      <line style="stroke:var(--muted)" x1="560" y1="75" x2="598" y2="75" stroke-width="2"/><polygon style="fill:var(--muted)" points="598,75 590,71 590,79"/>
+      <line style="stroke:var(--muted)" x1="645" y1="110" x2="590" y2="158" stroke-width="2"/><polygon style="fill:var(--muted)" points="590,158 597,152 599,160"/>
+      <line style="stroke:var(--muted)" x1="468" y1="190" x2="422" y2="190" stroke-width="2"/><polygon style="fill:var(--muted)" points="422,190 430,186 430,194"/>
+      <line style="stroke:var(--muted)" x1="198" y1="190" x2="150" y2="118" stroke-width="2"/><polygon style="fill:var(--muted)" points="150,118 152,127 157,120"/>
+    </svg>
+    <figcaption>本体工程循环。Semantica 的 ontology 模块几乎逐格对应：requirements_spec（1）、
+    competency_questions（2、5）、reuse_manager（3）、class/property 推断 + 命名规范（4）、
+    change_management 版本管理（6）。方法论是骨架，代码是它的实现。</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-competency-questions">4.2 能力问题（Competency Questions）：先问「要回答什么」</h2>
+
+  <p>
+    <strong>能力问题</strong>（CQ）是 Gruninger &amp; Fox 在 TOVE 方法里提出的概念，如今是行业标准：
+    在建模<strong>之前</strong>，用自然语言写下「这个本体建成后，必须能回答哪些问题」。
+    CQ 是本体的<strong>功能需求</strong>——它们决定边界（答不上 CQ 的领域角落不建）、
+    决定验收（拿 CQ 当测试用例）、决定粒度（问题问多细，模型建多细）。
+  </p>
+
+  <div class="box" style="border-left-color:var(--accent);">
+    <div class="box-title">好 CQ 长什么样（合同管理本体示例）</div>
+    <ul style="margin:.3rem 0;">
+      <li>「某公司当前是哪些合同的一方？」——具体、可测试、直接指向类和关系</li>
+      <li>「某合同在给定日期的生效状态是什么？」——引出时间维度建模</li>
+      <li>「哪些合同的签约对手方处在受制裁国家？」——引出跨源数据关联</li>
+    </ul>
+    <p style="margin:.3rem 0; color:var(--muted);">
+      反例：「合同有什么信息？」（太泛，什么模型都能说答了）、「系统性能如何？」（不是本体的问题）、
+      「AI 会取代律师吗？」（与本体的类和属性无关）。
+    </p>
+  </div>
+
+  <p>
+    Semantica 把 CQ 做成了<strong>可执行</strong>的一等公民（<code>semantica/ontology/competency_questions.py</code>）：
+  </p>
+
+  <pre><code>from semantica.ontology import CompetencyQuestionsManager
+
+manager = CompetencyQuestionsManager()
+manager.add_question("Who are the employees of a given organization?",
+                     category="organizational", priority=1)   # priority: 1=高 2=中 3=低
+
+results = manager.validate_ontology(ontology)   # 逐条检查本体能否回答
+manager.trace_to_elements(question, ontology)   # 问题 → 涉及哪些类/属性
+manager.generate_report(ontology)               # 覆盖率报告</code></pre>
+
+  <p>
+    数据结构上，<code>CompetencyQuestion</code>（第 42 行起）就是问题文本 + 类别
+    （general / organizational / temporal）+ 优先级 + <code>answerable</code> 标记 +
+    <code>trace_to_elements</code> 列表。<code>RequirementsSpecManager</code>
+    （<code>requirements_spec.py</code>）再把 CQ 装进完整的<strong>需求规格</strong>：
+    领域边界、实体类型范围、目的文档，外加 <code>trace_requirements()</code> 做
+    「需求 → 本体元素」的追溯。这两样合起来，就是上图第 1、2、5 格的代码化。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-reuse">4.3 站在巨人肩膀上：本体复用</h2>
+
+  <p>
+    方法论第二铁律：<strong>先找现成的，再造自己的</strong>。给「人」建模之前不知道 FOAF 存在、
+    给「文档元数据」建模之前没看过 Dublin Core、给「公司/产品」建模时忽略 Schema.org——
+    这些都是让未来互操作哭泣的决定。复用的收益不只是省事：用公共词表意味着别人的数据能直接对上你的。
+  </p>
+
+  <p>标准复用决策三选一（这也是 Semantica <code>ReuseDecision.decision</code> 字段的取值）：</p>
+
+  <ul>
+    <li><strong>reuse</strong>：直接引入整个外部本体/模块，用自己的命名空间引用其术语；</li>
+    <li><strong>partial</strong>：只对齐部分概念（如只用 FOAF 的 Person 定义，不用其社交属性）；</li>
+    <li><strong>reject</strong>：不合用，自建——但<strong>必须记录拒绝理由</strong>，否则半年后有人再问一遍。</li>
+  </ul>
+
+  <p>
+    <code>semantica/ontology/reuse_manager.py</code> 实现了完整的复用工作流，还内置了
+    「知名本体目录」（FOAF、Dublin Core、Schema.org）：
+  </p>
+
+  <pre><code>from semantica.ontology import ReuseManager
+
+manager = ReuseManager()
+info      = manager.research_ontology("http://xmlns.com/foaf/0.1/")  # 调研：元数据提取
+alignment = manager.evaluate_alignment(source_uri, target_ontology)  # 概念对齐评分
+interop   = manager.assess_interoperability(source_uri, target)      # 互操作收益评估
+ontology  = manager.import_external_ontology(source_uri, target)     # 导入（含命名空间合并）
+manager.track_reuse_decision(uri, decision="partial",
+                             reason="只用 Person 定义", ...)          # 决策留痕</code></pre>
+
+  <p>
+    <code>ReuseDecision</code>（第 43 行起）记录 source_uri、decision、reason、
+    imported_elements、compatibility_score——把「为什么当时这么决定」变成数据。
+    甚至还有 <code>convert_non_ontological_resource()</code>：把 CSV 代码表这类
+    非本体资源转换成本体——现实中大量「词表」一开始就是 Excel。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-naming-granularity">4.4 命名与粒度：小规矩，大秩序</h2>
+
+  <p>
+    本体是给别人读的。命名混乱的本体（<code>PersonInfo</code> vs <code>person_data</code> vs
+    <code>PEOPLE</code> 三个类并存）每个后来者都要付理解税。社区沉淀的规范意外地一致：
+  </p>
+
+  <table>
+    <thead><tr><th>元素</th><th>规范</th><th>正例</th><th>反例</th></tr></thead>
+    <tbody>
+      <tr><td>类名</td><td>PascalCase + <strong>单数</strong>名词短语</td><td><code>Organization</code></td><td><code>organizations</code>、<code>ORG</code></td></tr>
+      <tr><td>对象属性</td><td>camelCase + 动词短语/介词</td><td><code>worksFor</code></td><td><code>work_for</code>、<code>WorksFor</code></td></tr>
+      <tr><td>数据属性</td><td>camelCase + 名词</td><td><code>hasTitle</code></td><td><code>Title</code></td></tr>
+      <tr><td>本体名</td><td>小写连字符（文件/IRI 段）</td><td><code>contract-ontology</code></td><td><code>Contract Ontology!</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    「类用单数」值得单独说：类是概念的集合定义，<code>Organization</code> 读作「每一个组织」；
+    复数名 <code>Organizations</code> 会让人分不清它是类还是容器实例。这些规则琐碎到人肉执行必崩，
+    所以要<strong>自动化</strong>——Semantica 的 <code>NamingConventions</code>
+    （<code>semantica/ontology/naming_conventions.py</code>）提供
+    <code>validate_class_name / validate_property_name / suggest_class_name /
+    normalize_class_name</code> 全套（校验不过自动给建议名），本体生成流水线在推断出类名后
+    逐个过一遍（第 9 章会看到它在 <code>ClassInferrer</code> 里的调用点）。
+  </p>
+
+  <div class="demo" data-demo="namingCheck">
+    <div class="demo-title">动手试 — 实时命名规范检查器</div>
+    <p>输入框里随便打（试试 <code>contract parties</code>、<code>works_for</code>、<code>Organizations</code>），
+       看校验与建议如何实时变化。这是 NamingConventions 的简化版。</p>
+    <label>类名：<input type="text" data-kind="class" value="contract parties" style="min-width:200px"></label>
+    <label>属性名：<input type="text" data-kind="property" value="works_for" style="min-width:200px"></label>
+    <div class="demo-output empty">输入即检查。</div>
+  </div>
+
+  <p>
+    <strong>粒度</strong>是另一条纪律：模型该建多细？两个失败方向——过粗
+    （一个 <code>Party</code> 类装下人和公司，CQ「某公司的员工」答不利索）和过细
+    （给邮箱按域名分了八个子类，没有任何 CQ 需要它）。裁决标准回到 CQ：
+    <strong>问题问多细，模型建多细；没有问题需要的深度，就是过度设计</strong>。
+    Semantica 的 <code>OntologyEvaluator</code>（第 11 章展开）甚至量化了这件事——
+    粒度得分（granularity score）与泛化/特化分析。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-versioning">4.5 本体是活的：版本化与演进</h2>
+
+  <p>
+    本体一旦有数据在上面跑，改动就不再是自由操作：删掉一个类，别人 SPARQL 查询当场失效；
+    改一个属性的含义，历史数据的解释跟着变。所以成熟的本体工程有专门的版本纪律。
+    最重要的一条 IRI 最佳实践（也是 Semantica <code>NamespaceManager</code> 实现的）：
+  </p>
+
+  <div class="box" style="border-left-color:var(--pass);">
+    <div class="box-title">版本化 IRI 黄金法则</div>
+    <p style="margin:.3rem 0;">
+      <strong>版本号放本体 IRI 里，不放进元素 IRI</strong>。
+      即：<code>https://example.org/ontology/contract/v2</code> 是本体（ owl:Ontology 节点）的 IRI，
+      而 <code>…/contract/v2#Organization</code> 这种带版本的元素 IRI 是反模式——正确做法是
+      元素永远用无版本 IRI（<code>…/ontology/core#Organization</code>），版本关系通过
+      <code>owl:versionIRI</code>、<code>owl:priorVersion</code>、<code>owl:backwardCompatibleWith</code>
+      在本体节点上声明。
+    </p>
+    <p style="margin:.3rem 0; color:var(--muted);">
+      原因：元素 IRI 是全球坐标（第 1 章）；坐标一旦含版本，v1 和 v2 的同名类会被视为
+      <strong>不同</strong>实体，跨版本数据全部断裂——除非你到处补 sameAs。
+    </p>
+  </div>
+
+  <p>
+    Semantica 里版本管理经历了模块迁移：<code>VersionManager</code> 和 <code>OntologyVersion</code>
+    原来住在 ontology 包里，后来移到了独立的 <code>semantica.change_management</code> 模块
+    （<code>ontology/__init__.py:170-171</code> 有条注释专门说明此事——读源码时这种「搬家留言」
+    是理解模块演化史的线索）。它提供版本创建、diff 生成、迁移路径识别、多版本共存
+    （版本隔离 + import 闭包解析）。第 11 章精读。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">4.6 本章回顾（兼第一部分收官）</h2>
+  <ul>
+    <li>本体项目三大死法：过度工程、范围蔓延、无人使用；方法论循环是解药——
+        <strong>定范围 → 能力问题 → 复用调研 → 建模 → 用 CQ 验证 → 版本化演进</strong>。</li>
+    <li><strong>能力问题</strong>是本体的功能需求：具体、可测试、优先级分层；
+        Semantica 的 <code>CompetencyQuestionsManager</code> 让 CQ 可执行（验证/追溯/报告）。</li>
+    <li><strong>复用决策</strong>三选一：reuse / partial / reject，决策与理由必须留痕；
+        先看 FOAF / Dublin Core / Schema.org。对应 <code>ReuseManager</code>。</li>
+    <li><strong>命名纪律</strong>：类 PascalCase 单数名词、属性 camelCase；粒度由 CQ 决定——
+        没有问题需要的深度就是过度设计。对应 <code>NamingConventions</code>、<code>OntologyEvaluator</code>。</li>
+    <li><strong>版本化黄金法则</strong>：版本在 ontology IRI，不在元素 IRI；
+        owl:versionIRI / priorVersion / backwardCompatibleWith 声明关系。对应 <code>change_management.VersionManager</code>。</li>
+    <li>Semantica 的 ontology 模块结构 = 这套方法论的逐格实现。带着这张地图进第二、三部分。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>CQ 当装饰</strong>——写完就锁进文档，不拿来验证。CQ 不跑等于没写。</li>
+      <li><strong>重造 FOAF 轮子</strong>——自造 <code>hasName</code> 而不用 foaf:name，
+          代价是失去整个生态的互操作。</li>
+      <li><strong>元素 IRI 带版本号</strong>——v1/v2 同名类变成不同实体，跨版本数据断裂。</li>
+      <li><strong>按数据列名命名类</strong>——<code>TblCustomers</code> 不是概念，是表的影子；
+          本体建模概念，不是镜像表结构。</li>
+      <li><strong>「先把本体建完美再接数据」</strong>——正确顺序是 CQ → 最小可用模型 → 数据进来 →
+          用 SHACL 报告和 CQ 验证驱动迭代（Semantica 整个产品哲学就是「从数据生长出本体」）。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="4">
+    <h2>第 4 章测试</h2>
+
+    <div class="q" data-id="4-1" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— CQ 是本体的功能需求：划定边界、决定验收、控制粒度。"
+         data-rationale="A 错：CQ 在建模之前写，不是事后文档。B 错：CQ 是领域/业务问题，不是技术问题。D 错：SPARQL 是实现层，CQ 用自然语言写且早于任何查询。CQ 的三大作用正是治「范围蔓延」「无人使用」「过度工程」。"
+         data-review="sec-competency-questions">
+      <div class="prompt"><span class="qnum">Q1.</span> 能力问题（Competency Questions）在本体工程中的角色，最准确的说法是？</div>
+      <label class="opt"><input type="radio" name="q-4-1" value="a"> A. 建模完成后写的示例查询</label>
+      <label class="opt"><input type="radio" name="q-4-1" value="b"> B. 图数据库的性能测试问题</label>
+      <label class="opt"><input type="radio" name="q-4-1" value="c"> C. 建模之前写下的功能需求：本体必须能回答的问题，用于划界、验收、控制粒度</label>
+      <label class="opt"><input type="radio" name="q-4-1" value="d"> D. SPARQL 查询语句的标准别名</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-2" data-type="mcq" data-multiselect="true" data-correct='["b","d"]'
+         data-answer="B 和 D 是合格 CQ：具体、指向类与关系、可测试。A 过泛，C 与本体无关。"
+         data-rationale="好 CQ 的判据：具体到能映射出类/属性/关系、可直接当验收用例。「合同有什么信息」（A）任何模型都能糊弄；「AI 会取代律师吗」（C）不涉及领域概念的建模。B 引出状态+时间建模，D 引出 Organization-Person 关系，都是教科书级 CQ。"
+         data-review="sec-competency-questions">
+      <div class="prompt"><span class="qnum">Q2.</span> 为「合同管理本体」挑合格的能力问题。<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-4-2" value="a"> A. 「合同有什么信息？」</label>
+      <label class="opt"><input type="checkbox" name="q-4-2" value="b"> B. 「某合同在给定日期的生效状态是什么？」</label>
+      <label class="opt"><input type="checkbox" name="q-4-2" value="c"> C. 「AI 会取代律师吗？」</label>
+      <label class="opt"><input type="checkbox" name="q-4-2" value="d"> D. 「哪些合同的对手方处在受制裁国家？」</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-3" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— partial：只对齐需要的部分概念，并记录决策与理由。"
+         data-rationale="只用到 FOAF 的 Person 定义时，引入全部社交属性徒增维护负担（reject 不必要），也不必整包复用（reuse）。partial + track_reuse_decision(reason=...) 是标准动作——决策留痕防止半年后重复调研。"
+         data-review="sec-reuse">
+      <div class="prompt"><span class="qnum">Q3.</span> 你的本体只需要「人」的基本定义，调研发现 FOAF 的 Person 完全够用但其余社交属性用不上。Semantica 的 ReuseManager 框架下应该怎么决策？</div>
+      <label class="opt"><input type="radio" name="q-4-3" value="a"> A. reject——自己重新定义 Person</label>
+      <label class="opt"><input type="radio" name="q-4-3" value="b"> B. partial——只对齐 Person 相关概念，track_reuse_decision 记录理由</label>
+      <label class="opt"><input type="radio" name="q-4-3" value="c"> C. reuse——完整导入 FOAF 所有模块以备将来</label>
+      <label class="opt"><input type="radio" name="q-4-3" value="d"> D. 复制 FOAF 源码改名后当自己的本体</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-4" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 类名 PascalCase + 单数名词短语。"
+         data-rationale="类是概念（每一个组织），单数 PascalCase：Organization。属性 camelCase 动词短语（worksFor）。NamingConventions 正是按这套校验并给建议（semantica/ontology/naming_conventions.py）。"
+         data-review="sec-naming-granularity">
+      <div class="prompt"><span class="qnum">Q4.</span> 按社区命名规范，「组织」这个类和「任职于」这个对象属性的正确命名分别是？</div>
+      <label class="opt"><input type="radio" name="q-4-4" value="a"> A. <code>Organization</code> 和 <code>worksFor</code></label>
+      <label class="opt"><input type="radio" name="q-4-4" value="b"> B. <code>organizations</code> 和 <code>work_for</code></label>
+      <label class="opt"><input type="radio" name="q-4-4" value="c"> C. <code>ORG</code> 和 <code>WorksFor</code></label>
+      <label class="opt"><input type="radio" name="q-4-4" value="d"> D. <code>organization_list</code> 和 <code>WORKS_FOR</code></label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-5" data-type="mcq" data-correct='["d"]'
+         data-answer="D —— 粒度由能力问题决定：问题问多细，模型建多细；没有 CQ 需要的深度就是过度设计。"
+         data-rationale="A（跟着数据源走）是镜像表结构，本体该建模概念不是镜像列；B（越细越好）是过度工程的标准死法；C（跟着实现走）把模型绑死在查询上。CQ 是唯一正当的裁决标准——OntologyEvaluator 的粒度评估也是围绕「够不够答问题」展开。"
+         data-review="sec-naming-granularity">
+      <div class="prompt"><span class="qnum">Q5.</span> 建模时「该建多细」的裁决标准是什么？</div>
+      <label class="opt"><input type="radio" name="q-4-5" value="a"> A. 数据源有多少列就建多少属性</label>
+      <label class="opt"><input type="radio" name="q-4-5" value="b"> B. 越细越好，深度细分体现专业性</label>
+      <label class="opt"><input type="radio" name="q-4-5" value="c"> C. 跟着下游应用的 SQL 查询走</label>
+      <label class="opt"><input type="radio" name="q-4-5" value="d"> D. 能力问题问多细就建多细，没有问题需要的深度就是过度设计</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-6" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 版本放本体 IRI（owl:versionIRI 等），元素 IRI 永远无版本。"
+         data-rationale="元素 IRI 是全球坐标；一旦带上版本，v1/v2 的同名类成为不同实体，跨版本数据断裂、到处补 sameAs。正确姿势：…/core#Organization 不变，本体节点用 owl:versionIRI/priorVersion/backwardCompatibleWith 声明版本谱系。"
+         data-review="sec-versioning">
+      <div class="prompt"><span class="qnum">Q6.</span> 本体 v2 发布，元素 IRI 应该怎么处理版本？</div>
+      <label class="opt"><input type="radio" name="q-4-6" value="a"> A. 所有元素改为 …/v2#Organization，清晰明了</label>
+      <label class="opt"><input type="radio" name="q-4-6" value="b"> B. 只给发生变化的元素加版本后缀</label>
+      <label class="opt"><input type="radio" name="q-4-6" value="c"> C. 元素 IRI 保持无版本；版本通过本体节点的 owl:versionIRI / owl:priorVersion 声明</label>
+      <label class="opt"><input type="radio" name="q-4-6" value="d"> D. 把版本号写进每个元素的 rdfs:label</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-7" data-type="fill" data-accepted='["competencyquestionsmanager","competency questions manager","competencyquestionsmanager()", "competency_questions"]'
+         data-answer="CompetencyQuestionsManager（semantica/ontology/competency_questions.py）。"
+         data-rationale="它提供 add_question / validate_ontology / trace_to_elements / generate_report，把 CQ 从文档变成可执行的功能需求。RequirementsSpecManager 则负责把 CQ 装进完整需求规格。"
+         data-review="sec-competency-questions">
+      <div class="prompt"><span class="qnum">Q7.</span> 填空：Semantica 中管理能力问题（添加、验证本体能否回答、生成报告）的类是 ______。</div>
+      <input type="text" class="fill" placeholder="类名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-8" data-type="fill" data-accepted='["reuse_manager","reusemanager","reuse manager","semantica.ontology.reuse_manager"]'
+         data-answer="ReuseManager（semantica/ontology/reuse_manager.py）。"
+         data-rationale="research_ontology 调研、evaluate_alignment 对齐评分、import_external_ontology 导入、track_reuse_decision 决策留痕，内置 FOAF/Dublin Core/Schema.org 目录。"
+         data-review="sec-reuse">
+      <div class="prompt"><span class="qnum">Q8.</span> 填空：Semantica 中负责本体复用决策（调研/对齐/导入/留痕）的类是 ______。</div>
+      <input type="text" class="fill" placeholder="类名（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-9" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— VersionManager 和 OntologyVersion 现居 semantica.change_management 模块。"
+         data-rationale="ontology/__init__.py:170-171 的注释明确记录了这次搬家（「VersionManager and OntologyVersion moved to change_management module」）。版本创建、diff、迁移路径、多版本共存都在那里。这种「搬家留言」是读演化中代码库的重要线索。"
+         data-review="sec-versioning">
+      <div class="prompt"><span class="qnum">Q9.</span> Semantica 的 <code>VersionManager</code> / <code>OntologyVersion</code> 现在住在哪个模块？</div>
+      <label class="opt"><input type="radio" name="q-4-9" value="a"> A. semantica.ontology（从未移动）</label>
+      <label class="opt"><input type="radio" name="q-4-9" value="b"> B. semantica.change_management（从 ontology 迁移过去）</label>
+      <label class="opt"><input type="radio" name="q-4-9" value="c"> C. semantica.kg</label>
+      <label class="opt"><input type="radio" name="q-4-9" value="d"> D. semantica.provenance</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="4-10" data-type="short"
+         data-key-points='["CQ 是建模前写下的功能需求，用于划界/验收/控粒度，写完必须拿去验证","复用三决策（reuse/partial/reject）+ 决策留痕；先看 FOAF/DC/Schema.org","命名纪律：类 PascalCase 单数名词、属性 camelCase，且要自动化（NamingConventions）","粒度由 CQ 裁决：问题问多细建多细，没有问题需要的深度即过度设计","版本化黄金法则：版本在 ontology IRI（owl:versionIRI），元素 IRI 永远无版本","Semantica ontology 模块 = 方法论逐格实现（requirements_spec/competency_questions/reuse_manager/naming_conventions/change_management）"]'
+         data-answer="本体工程循环：定范围 → 写能力问题（本体的功能需求，划定边界、当验收用例、裁决粒度）→ 复用调研（reuse/partial/reject 三决策并留痕，先看 FOAF/Dublin Core/Schema.org）→ 建模（遵守命名纪律：类 PascalCase 单数、属性 camelCase）→ 用 CQ 验证模型（答不了就迭代）→ 版本化演进（版本号在 ontology IRI，元素 IRI 永远无版本，用 owl:versionIRI/priorVersion 声明关系）。粒度原则：CQ 问多细建多细，多余的深度是过度设计。Semantica 的 ontology 模块逐格实现了这套方法论：RequirementsSpecManager、CompetencyQuestionsManager、ReuseManager、NamingConventions，以及迁到 change_management 的 VersionManager。"
+         data-rationale="六个要点：CQ 定位与用法、复用决策、命名纪律、粒度裁决、版本化黄金法则、Semantica 映射。全答到说明你已具备「会建本体」而不只是「会读写本体」。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q10.</span> 综合：完整描述本体工程循环的六个环节，以及 CQ、复用决策、命名纪律、粒度原则、版本化法则各自的作用。Semantica 哪些类对应这些环节？</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    第一部分完结。接下来进入第二部分：<a href="05-architecture.html"><strong>Semantica 架构全景与核心抽象</strong></a>——
+    把领域知识挂到这个 repo 的真实骨架上。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>

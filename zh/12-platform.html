@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 12 章 — 本体在平台中的位置</title>
+<script>(function(){try{var t=localStorage.getItem("pbf:theme");if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="brand">◆ 本体之路 · SEMANTICA</a>
+  <span class="crumb">第 12 章 · 第三部分：ontology 深潜</span>
+  <span class="spacer"></span>
+  <nav class="chapter-nav"></nav>
+</div>
+
+<main class="chapter" data-chapter-n="12">
+<script>window.BOOK_CONFIG = { slug: "semantica-ontology-expert", lang: "zh", chapters: [
+  { n: 1, slug: "01-what-is-ontology" },
+  { n: 2, slug: "02-rdfs-owl" },
+  { n: 3, slug: "03-shacl-skos" },
+  { n: 4, slug: "04-ontology-engineering" },
+  { n: 5, slug: "05-architecture" },
+  { n: 6, slug: "06-dataflow" },
+  { n: 7, slug: "07-intelligence-layer" },
+  { n: 8, slug: "08-generator-pipeline" },
+  { n: 9, slug: "09-inference" },
+  { n: 10, slug: "10-shacl-validation" },
+  { n: 11, slug: "11-governance" },
+  { n: 12, slug: "12-platform" },
+  { n: 13, slug: "13-dev-contributing" }
+] };</script>
+
+  <div class="chapter-header">
+    <div class="eyebrow">Chapter 12 · 第三部分：semantica.ontology 深潜</div>
+    <h1>本体在平台中的位置：反哺、导出、安全与界面</h1>
+    <p class="lede">
+      ontology 模块不是孤岛。本章看它如何在平台四处伸出触角：向上反哺分块
+      （ontology-aware chunking）、向外定义导出词汇表（semantica.dev/ns）、
+      守住序列化的安全边界（一个 2026 年 8 月刚修的注入漏洞）、以及顶到用户界面的
+      Ontology Hub。四个集成点各是一个经典工程主题：<strong>闭环、契约、安全、人机协作</strong>。
+    </p>
+  </div>
+
+  <div class="box objectives">
+    <div class="box-title">学习目标</div>
+    <ul>
+      <li>能解释 ontology-aware 分块如何让「模式层反哺数据层」，以及它与 entity_aware 的分工</li>
+      <li>能说出 semantica.dev/ns 平台词汇表的「不发明术语」原则及其可信度价值</li>
+      <li>能描述 Turtle/N-Triples IRIREF 注入漏洞的原理与修复方式——为什么序列化是安全边界</li>
+      <li>能列出 Ontology Hub（explorer/routes/ontology.py）提供的工作流（草稿/提案/对齐/版本/SHACL）</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-chunking">12.1 ontology-aware 分块：模式层反哺数据层</h2>
+
+  <p>
+    第 6 章讲分块时提过 <code>ontology_aware</code> 方法（<code>split/kg_chunkers.py:321</code> 的
+    <code>OntologyAwareChunker</code>，核心函数 <code>split_ontology_aware</code>）。它的独特之处在于
+    <strong>方向反转</strong>：其他分块方法只看眼前的文本，ontology_aware 还要参考已有的本体——
+    按类与属性的边界切块，让每个分块尽量完整覆盖「关于某类实体的叙述」。
+  </p>
+
+  <p>
+    这就是「反哺」：第 8–9 章从数据长出本体，这里本体反过来指导新数据的加工。
+    两层配合的意义在 GraphRAG 检索链：查询命中一个块 → 块里实体已按类聚集 →
+    顺着本体的类/属性定义扩展检索（同一类的其他实例）。<strong>数据层长出模式层，模式层再把
+    数据层的加工照亮</strong>——全书的主线论断在这里有了第一个具体循环。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-export">12.2 RDF 导出与平台词汇表 semantica.dev/ns</h2>
+
+  <p>
+    导出（<code>semantica.export.RDFExporter</code> 等）要回答一个本体问题：
+    「Semantica 自己导出的 RDF 里，那些非标准谓语（sem:xxx）是谁定义的？」答案在
+    <code>semantica/ontology/vocabulary/semantica-ns.ttl</code>——平台<strong>自己的词表</strong>，
+    声明 <code>sem:</code> 前缀下的每个术语：<code>sem:Entity</code>（无类型实体的兜底类）、
+    <code>sem:Relationship</code>（JSON-LD 导出里被具体化的关系：<code>sem:type/source/target</code>）、
+    <code>sem:KnowledgeGraph</code>（JSON-LD 顶层文档类型）……
+  </p>
+
+  <p>
+    这个文件最值得学的是它的<strong>自我克制声明</strong>（rdfs:comment 原文大意）：
+    「以下每个术语都出现在包今天真实产出的输出中（起草自 0.6.5 版导出调用点）；
+    <strong>没有为了完整性而发明任何术语</strong>」。这是第 4 章方法论的「不留想象空间」
+    在词汇表层面的实践——词表与实现同步、拒绝假大全。读它的类定义（Entity/Relationship/KnowledgeGraph）
+    还能顺带理解 JSON-LD 导出为什么把关系具体化成节点（第 5 章 KG 字典的关系带属性，
+    二元三元组装不下——正是第 11 章中间类模式的序列化版）。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-injection">12.3 安全边界：一个刚修的 Turtle 注入漏洞</h2>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 案例：commit 220fb10e（2026-08-24，就在昨天）</div>
+    <p style="margin:.3rem 0;">
+      标题：<em>fix(export): escape IRI-valued metadata to close a Turtle/N-Triples
+      injection gap</em>。漏洞：RDF 导出器把 <strong>IRI 型的元数据值</strong>
+      （当前只有 <code>sem:sourceUri</code>，来自实体的 <code>metadata["uri"]</code> 键）
+      直接拼进 <code>&lt;{value}&gt;</code>——<strong>零转义</strong>。
+    </p>
+    <p style="margin:.3rem 0;">
+      为什么危险？Turtle/N-Triples 的 IRIREF 语法<strong>禁止</strong>控制字符、空格、
+      <code>&lt; &gt; " { } | ^ \` \</code> 不经转义出现。一个恶意构造的元数据值
+      （比如包含 <code>" . </code> 之类语法字符的 URI）可以在序列化产物里<strong>注入额外的三元组</strong>，
+      甚至破坏整个文档的语法——攻击者的数据借导出之手写进了你的审计档案。
+    </p>
+    <p style="margin:.3rem 0;">
+      修复：对这些字符做转义后才写入 IRIREF。教训（本repo 专家必修）：
+      <strong>「数据 → RDF 文本」的每一步序列化都是安全边界</strong>。
+      只要值来自外部（文档、元数据、合并进来的实体），就可能携带语法武器；
+      第 2 章 _mint_term_iri 的百分号编码、这里 IRIREF 转义，是同一原则在不同语法层的落点。
+      你现在读的这本书成书前一天，这条边界刚被补上——安全是持续过程，不是完成时。
+    </p>
+  </div>
+
+  <pre><code># 漏洞形态（修复前，伪码）
+g.add((subj, SEM.sourceUri, URIRef(metadata["uri"])))
+# 序列化时 URIRef 直接变 <{value}> —— 值里若含 " . < > 等字符
+# → 攻击者可以在你的 Turtle 里"续写"三元组
+
+# 修复后：值先按 IRIREF 语法转义（控制字符/空格/&lt;&gt;"{}|^`\ 全部处理）
+# 序列化产物恢复为「数据只能当数据，永远不能当语法」</code></pre>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-explorer">12.4 Ontology Hub：本体工作台的用户界面</h2>
+
+  <p>
+    README 里的「Ontology Hub · SHACL Studio · 可视化编辑器」落在
+    <code>explorer/routes/ontology.py</code>——一个 FastAPI 路由（<code>/api/ontology</code> 前缀）。
+    扫一眼它的内部结构（:527-722），能看出一个完整的<strong>人机协作治理工作流</strong>：
+  </p>
+
+  <ul>
+    <li><strong>本体注册表</strong>（<code>_get_registry</code>，:527）——已导入本体的会话态登记；</li>
+    <li><strong>对齐存储</strong>（<code>_get_alignment_store</code>，:533）——跨本体概念对齐
+        （第 11 章引擎的对齐能力在界面侧的落点）；</li>
+    <li><strong>草稿与提案</strong>（<code>_get_drafts</code> / <code>_get_proposals</code>，:539/:545）——
+        本体修改的 <strong>draft → proposal 审批流</strong>：改动不直接生效，走提案评审
+        （第 4 章「决策留痕」的界面化）；</li>
+    <li><strong>版本列表</strong>（<code>_get_versions</code>，:551）——第 11 章 VersionManager 的展示层；</li>
+    <li><strong>SHACL 校验端点</strong>——带 <code>asyncio.Semaphore</code> 并发闸（:136）：
+        pyshacl 校验是 CPU 重活，信号量防止并发请求压垮工作台；</li>
+    <li><strong>图可视化转换</strong>（<code>_convert_ontology_to_graph</code>，:638）——
+        本体 dict → 前端图的节点/边列表，配命名空间提取（:714）与节点类型分类（:588）。</li>
+  </ul>
+
+  <p>
+    一个诚实的工程观察：这些 store 都是<strong>进程内存字典</strong>（<code>Dict[str, OntologyEntry]</code>）——
+    重启即清空，多副本不共享。作为「工作台/草稿区」合理，作为持久化治理库不够
+    （那是 change_management 的 version_storage 的活）。判断一个 HTTP API 的持久化语义，
+    看它的存储类型比看路由名可靠——这是第 3 章以来「读代码不信标签」的又一次应用。
+  </p>
+
+  <p>
+    配套的还有 <code>explorer/routes/vocabulary.py</code>（SKOS 词表管理界面，
+    第 3 章 validate_skos_hierarchy 守卫的写入端）和 CLI 的 <code>semantica ontology</code> 命令组——
+    同一套能力在 Python API / REST / 界面 / CLI 四个入口各有其形（第 5 章的入口矩阵到此闭环）。
+  </p>
+
+  <!-- ================================================================ -->
+  <h2 id="sec-recap">12.5 本章回顾</h2>
+  <ul>
+    <li><strong>反哺闭环</strong>：ontology_aware 分块（kg_chunkers.py:321）用已有本体指导新数据切块——
+        模式层照亮数据层的加工，检索链因此受益。</li>
+    <li><strong>平台词汇表</strong> semantica.dev/ns：只声明包今天真实产出的术语，「不为完整性发明」；
+        sem:Relationship 的具体化是中间类模式的序列化版。</li>
+    <li><strong>序列化即安全边界</strong>（commit 220fb10e）：IRI 型元数据未转义直接进
+        <code>&lt;…&gt;</code> 允许注入三元组；修复=按 IRIREF 语法转义。
+        外部数据永远可能携带语法武器。</li>
+    <li><strong>Ontology Hub</strong>（explorer/routes/ontology.py）：注册表/对齐/草稿→提案审批流/
+        版本/SHACL 端点（带并发信号量）/图可视化；存储是进程内存字典——工作台语义，非持久化治理库。</li>
+    <li>同一套本体能力分布在 Python API / REST / Explorer / CLI 四入口——第 5 章入口矩阵闭环。</li>
+  </ul>
+
+  <div class="box pitfalls">
+    <div class="box-title">常见误区</div>
+    <ul style="margin:0;">
+      <li><strong>把外部 URI 直接拼进 RDF 文本</strong>——注入漏洞的标准成因；
+          序列化库帮你转义的前提是你走库，手拼字符串没人救。</li>
+      <li><strong>以为 Explorer 的本体注册表是持久存储</strong>——进程内存字典，重启即空；
+          持久化治理在 change_management。</li>
+      <li><strong>忽略 SHACL 端点的并发闸</strong>——pyshacl 是 CPU 密集型，Semaphore 限的是工作台不被压垮。</li>
+      <li><strong>把 sem: 词表当标准词表引用</strong>——它是平台自有导出词汇（0.1.0-draft），
+          互操作时公共词表（schema.org 等）仍是首选。</li>
+    </ul>
+  </div>
+
+  <!-- ====================== TEST ====================== -->
+  <form class="test" data-chapter="12">
+    <h2>第 12 章测试</h2>
+
+    <div class="q" data-id="12-1" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 它参考已有本体的类/属性边界来切块，让模式层反哺数据层加工。"
+         data-rationale="entity_aware（A）只看文本内的实体名；ontology_aware（kg_chunkers.py:321）额外用本体定义指导切块——数据长出本体、本体照亮数据，第一个具体循环。C/D 不是它的机制。"
+         data-review="sec-chunking">
+      <div class="prompt"><span class="qnum">Q1.</span> ontology_aware 分块与 entity_aware 分块的本质区别是？</div>
+      <label class="opt"><input type="radio" name="q-12-1" value="a"> A. 前者按字符数切，后者按句子切</label>
+      <label class="opt"><input type="radio" name="q-12-1" value="b"> B. 前者参考已有本体的类/属性边界切块（模式层反哺数据层）</label>
+      <label class="opt"><input type="radio" name="q-12-1" value="c"> C. 前者必须用 LLM，后者用本地模型</label>
+      <label class="opt"><input type="radio" name="q-12-1" value="d"> D. 前者只适用于 CSV</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-2" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— 不发明术语：词表里每个术语都出现在包当前真实产出的输出中（起草自 0.6.5 的导出调用点）。"
+         data-rationale="semantica-ns.ttl 的 rdfs:comment 原文承诺「no term has been invented for completeness」。这是词表可信度的根基：文档与实现同步、拒绝假大全——读词表的人可以相信每个术语都真的会出现。"
+         data-review="sec-export">
+      <div class="prompt"><span class="qnum">Q2.</span> semantica.dev/ns 平台词汇表最值得学习的原则是？</div>
+      <label class="opt"><input type="radio" name="q-12-2" value="a"> A. 不发明术语：只声明包今天真实产出的每个 sem: 术语</label>
+      <label class="opt"><input type="radio" name="q-12-2" value="b"> B. 尽量覆盖未来可能用到的所有术语</label>
+      <label class="opt"><input type="radio" name="q-12-2" value="c"> C. 复刻 schema.org 全集</label>
+      <label class="opt"><input type="radio" name="q-12-2" value="d"> D. 每次导出动态生成</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-3" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 恶意元数据值含语法字符（" . &lt;&gt; 等），未转义写入 IRIREF 后可注入额外三元组/破坏文档。"
+         data-rationale="commit 220fb10e：_turtle_object() 把 IRI 型元数据（sem:sourceUri）零转义拼进 <{value}>。IRIREF 语法禁止控制字符/空格/&lt;&gt;"{}|^`\ 不转义出现——外部数据借序列化之手改写语法。修复=转义。教训：序列化是安全边界。"
+         data-review="sec-injection">
+      <div class="prompt"><span class="qnum">Q3.</span> Turtle/N-Triples 注入漏洞（2026-08 修复）的攻击原理是？</div>
+      <label class="opt"><input type="radio" name="q-12-3" value="a"> A. SQL 注入到 SQLite 溯源库</label>
+      <label class="opt"><input type="radio" name="q-12-3" value="b"> B. 路径穿越写任意文件</label>
+      <label class="opt"><input type="radio" name="q-12-3" value="c"> C. IRI 型元数据值未转义直接进 &lt;…&gt;，值里的语法字符可注入额外三元组</label>
+      <label class="opt"><input type="radio" name="q-12-3" value="d"> D. SSRF 访问内网</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-4" data-type="mcq" data-multiselect="true" data-correct='["a","b","e"]'
+         data-answer="A（草稿→提案审批流）、B（跨本体对齐）、E（SHACL 校验端点，带 Semaphore 并发闸）都是 Ontology Hub 工作流；C 的持久化版本存储在 change_management；D 的爬虫不存在。"
+         data-rationale="explorer/routes/ontology.py 提供：registry（会话态）、alignment store、drafts→proposals 审批流、版本列表展示、SHACL 端点（:136 asyncio.Semaphore 防 CPU 压垮）、图可视化转换。版本持久化本体在 version_storage.py（change_management），Hub 只是展示层。"
+         data-review="sec-explorer">
+      <div class="prompt"><span class="qnum">Q4.</span> Ontology Hub（explorer/routes/ontology.py）包含哪些工作流？<em>多选。</em></div>
+      <label class="opt"><input type="checkbox" name="q-12-4" value="a"> A. 本体修改的草稿 → 提案审批流</label>
+      <label class="opt"><input type="checkbox" name="q-12-4" value="b"> B. 跨本体概念对齐管理</label>
+      <label class="opt"><input type="checkbox" name="q-12-4" value="c"> C. 持久化版本存储（重启不丢）</label>
+      <label class="opt"><input type="checkbox" name="q-12-4" value="d"> D. 自动网络爬虫补全本体</label>
+      <label class="opt"><input type="checkbox" name="q-12-4" value="e"> E. 带并发闸的 SHACL 校验端点</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-5" data-type="mcq" data-correct='["b"]'
+         data-answer="B —— 工作台/草稿区语义：作为界面交互合理，但持久化治理应走 change_management 的存储。"
+         data-rationale="_get_registry 等返回 Dict[str, OntologyEntry]——进程内存字典，重启清空、多副本不共享。判断 API 持久化语义看存储类型，不看路由名（读代码不信标签的又一课）。"
+         data-review="sec-explorer">
+      <div class="prompt"><span class="qnum">Q5.</span> Ontology Hub 的注册表/草稿/对齐存储是进程内存字典，这个事实意味着什么？</div>
+      <label class="opt"><input type="radio" name="q-12-5" value="a"> A. 这是 bug，应立即修</label>
+      <label class="opt"><input type="radio" name="q-12-5" value="b"> B. 合理的工作台语义；持久化治理在 change_management（version_storage）</label>
+      <label class="opt"><input type="radio" name="q-12-5" value="c"> C. 数据实际存在 Neo4j</label>
+      <label class="opt"><input type="radio" name="q-12-5" value="d"> D. 浏览器 localStorage</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-6" data-type="fill" data-accepted='["sem:sourcuri","sourcuri","sem:sourceUri"]'
+         data-answer="sem:sourceUri（来自实体 metadata 的 "uri" 键，是注入漏洞的入口字段）。"
+         data-rationale="commit 220fb10e 修复说明：当前唯一走 IRIREF 零转义路径的就是 IRI 型元数据 sem:sourceUri。它是外部可控数据进入序列化语法的通道，故被优先修复。"
+         data-review="sec-injection">
+      <div class="prompt"><span class="qnum">Q6.</span> 填空：注入漏洞涉及的 IRI 型元数据谓语是 ______（sem: 前缀）。</div>
+      <input type="text" class="fill" placeholder="谓语（英文）">
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-7" data-type="mcq" data-correct='["c"]'
+         data-answer="C —— 防并发压垮：pyshacl 校验是 CPU 重活，信号量限制同时校验数，保护工作台进程。"
+         data-rationale="explorer/routes/ontology.py:136 的 _get_shacl_semaphore。A 的限流是 API 网关的事；B 的轮询不是 Semaphore 用法；D 与事实相反。工程含义：把同步 CPU 大任务暴露成 HTTP 端点时，必须自己做并发闸。"
+         data-review="sec-explorer">
+      <div class="prompt"><span class="qnum">Q7.</span> SHACL 校验端点用 asyncio.Semaphore 的目的是？</div>
+      <label class="opt"><input type="radio" name="q-12-7" value="a"> A. 按用户限流计费</label>
+      <label class="opt"><input type="radio" name="q-12-7" value="b"> B. 轮询多个 pyshacl 实例</label>
+      <label class="opt"><input type="radio" name="q-12-7" value="c"> C. 限制并发校验数，防止 CPU 密集的 pyshacl 压垮工作台</label>
+      <label class="opt"><input type="radio" name="q-12-7" value="d"> D. 加密校验请求</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-8" data-type="mcq" data-correct='["a"]'
+         data-answer="A —— JSON-LD 导出把关系具体化为带 sem:type/sem:source/sem:target 的节点——中间类模式的序列化版。"
+         data-rationale="semantica-ns.ttl 对 sem:Relationship 的注释：JSON-LD 导出中关系以节点形式出现（携带 sem:type、sem:source、sem:target），因为 KG 字典的关系带属性，二元三元组装不下——与第 11 章 AssociativeClass 同构。"
+         data-review="sec-export">
+      <div class="prompt"><span class="qnum">Q8.</span> JSON-LD 导出中，带属性的关系（如带签署日期的 partyTo）如何表示？</div>
+      <label class="opt"><input type="radio" name="q-12-8" value="a"> A. 具体化为 sem:Relationship 节点（sem:type/sem:source/sem:target + 属性）</label>
+      <label class="opt"><input type="radio" name="q-12-8" value="b"> B. 直接丢掉属性只留谓语</label>
+      <label class="opt"><input type="radio" name="q-12-8" value="c"> C. 属性挂在主语实体上</label>
+      <label class="opt"><input type="radio" name="q-12-8" value="d"> D. 转成 CSV 附表</label>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-id="12-9" data-type="short"
+         data-key-points='["ontology_aware 分块 = 模式层反哺数据层（数据长出本体、本体照亮数据加工的循环）","平台词表 semantica.dev/ns 的不发明原则：每个术语都真实出现在当前输出中","序列化是安全边界：IRI 型元数据未转义 → 注入三元组（220fb10e 修复）；外部数据可能携带语法武器","Ontology Hub 工作流：注册/对齐/草稿→提案/版本/SHACL（带并发闸）；存储为进程内存字典（工作台语义）"]'
+         data-answer="本体的四个平台集成点：① ontology_aware 分块用已有本体的类/属性边界指导切块——模式层反哺数据层的循环闭环；② semantica.dev/ns 平台词表坚持不发明术语（每个 sem: 术语都真实出现在当前输出），JSON-LD 导出把带属性的关系具体化为 sem:Relationship 节点；③ 序列化是安全边界——IRI 型元数据（sem:sourceUri）未转义进 IRIREF 可注入三元组（commit 220fb10e 修复），外部数据可能携带语法武器；④ Ontology Hub 提供 注册/对齐/草稿→提案审批/版本/SHACL 端点（asyncio.Semaphore 防 CPU 压垮）/图可视化，存储是进程内存字典——工作台语义，持久化治理在 change_management。"
+         data-rationale="四个要点：反哺闭环、词表原则、注入教训、Hub 工作流与存储语义。"
+         data-review="sec-recap">
+      <div class="prompt"><span class="qnum">Q9.</span> 综合：描述本体的四个平台集成点（反哺、词表、安全、界面），各讲一个值得记住的工程原则。</div>
+      <textarea class="short" placeholder="用自己的话写…"></textarea>
+      <div class="key-points">
+        <div class="hint">只勾选你确实答到的要点。</div>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <button type="submit" class="submit-test">提交测试</button>
+    <div class="test-result"></div>
+    <button type="button" class="retake-btn" hidden>重做测试</button>
+  </form>
+
+  <p style="margin-top:2rem; color:var(--muted);">
+    最后一章：<a href="13-dev-contributing.html"><strong>开发环境与贡献地图</strong></a>——
+    跑通测试、读懂 CI、找到你的第一个 PR 落点。
+  </p>
+
+</main>
+
+<script src="assets/book.js" defer></script>
+</body>
+</html>
