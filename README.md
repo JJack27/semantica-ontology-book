@@ -1,8 +1,14 @@
 # 本体之路 · Semantica × 本体专家之路
 
+**在线阅读**：<https://jjack27.github.io/semantica-ontology-book/> ·
+**仓库**：<https://github.com/JJack27/semantica-ontology-book>
+
 一本为「双目标」锻造的中文交互书：**成为 [semantica](https://github.com/semantica-agi/semantica)
 repo 的专家，同时成为本体（Ontology）领域的专家**。由 personal-book-forger 技能生成，
-内容对照 semantica main 分支（2026-08-25）真实源码写就。
+内容对照 semantica main 分支（2026-08-25，commit 4217f23d）真实源码写就。
+
+> 提示：在线阅读时进度与测试分数存在浏览器的 localStorage 里（按域名隔离），
+> 与本地 `file://` 打开的成绩互不相通。
 
 ## 打开方式
 
