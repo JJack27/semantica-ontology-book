@@ -51,7 +51,7 @@
       <li>能复述数据在流水线每个节点上的形状（文档 → 分块 → 实体/关系 → KG 字典 → Turtle）</li>
       <li>能说出 entity_aware 分块为什么对 GraphRAG 至关重要，以及抽取后端（ml/pattern/llm）的选择逻辑</li>
       <li>能解释五类冲突（值/类型/关系/时间/逻辑）和三种仲裁策略（credibility_weighted / most_recent / voting）</li>
-      <li>能描述 blocking + 语义相似度的去重两步法，以及为什么合并必须保留 provenance</li>
+      <li>能描述 blocking + 多因子相似度的去重两步法，以及为什么合并必须保留 provenance</li>
       <li>能解释双时间态（valid time vs recorded time）并手工判断「某查询日哪些事实可见」</li>
     </ul>
   </div>
@@ -138,11 +138,39 @@ docs = FileIngestor().ingest_directory("./contracts/", recursive=True)
   <p>
     规范化（<code>semantica.normalize</code>）处理「人类写法」造成的脏：<code>TextNormalizer</code>
     清 Unicode/智能引号/HTML 标签；<code>EntityNormalizer</code> 做别名归一
-    （"ACME Corp." → 规范名 + 置信度）；<code>DateNormalizer</code> 解析「三周前」这类自然语言日期；
+    （"ACME Corp." → 规范名 + 置信度）；<code>DateNormalizer</code> 解析 "3 weeks ago" 这类
+    <strong>英文写法</strong>的相对日期（机制与边界见下方对照真码）；
     <code>NumberNormalizer</code> 把 "$1.25M USD" 变成 <code>1_250_000</code> + 币种。
     别小看这一步——第 9 章你会看到，<strong>本体类推断的质量直接吃规范化的红利</strong>：
     类型字段不归一，频率统计就是垃圾进垃圾出。
   </p>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 对照真码：DateNormalizer 是一条正则，不是语言理解</div>
+    <p style="margin:.3rem 0;">
+      <code>normalize/date_normalizer.py</code> 的 <code>RelativeDateProcessor</code> 是一条
+      <strong>四层兜底链</strong>（<code>date_normalizer.py:391</code>）：
+    </p>
+    <ol style="margin:.3rem 0 .3rem 1.2rem;">
+      <li>查字典：<code>{"today": 0, "yesterday": -1, "tomorrow": 1, "now": 0}</code>，共四个词；</li>
+      <li>跑正则：<code>(\d+)\s*(day|week|month|year)s?\s*(ago|from now|later)?</code>
+        ——只认<strong>阿拉伯数字 + 英文单位</strong>，命中后做 timedelta 加减；</li>
+      <li>丢给 <code>dateutil.parse</code> 解析绝对日期（"2024-01-15" 这类）；</li>
+      <li>都失败：<strong>静默返回参照日期本身</strong>——不报错、不返回 None。</li>
+    </ol>
+    <p style="margin:.3rem 0;">
+      以 2026-08-25 为参照实跑：|"3 days ago"→08-22 ✓|"2 weeks from now"→09-08 ✓|
+      "yesterday"→08-24 ✓（字典）|"2024-01-15"→原样 ✓（dateutil）——但
+      <strong>"three days ago"（拼写的数字）、「三天前」（中文）、"last tuesday" 全部落进第 4 层，
+      返回值恰好是「今天」</strong>。失败是静默的：不抛异常、没有标记，下游看不出这日期是解析出来的还是兜底兜出来的。
+      这是规范化层最值得防的坑——<strong>喂中文语料时这一步等于没做</strong>，中文相对时间只有走 6.3 节的
+      llm 抽取后端才有人接得住。
+    </p>
+    <p style="margin:.3rem 0;">
+      另一个细节：月/年的精度依赖 <code>dateutil</code> 是否安装。装了走 <code>relativedelta</code>
+      真日历运算，没装就按每月 30 天、每年 365 天近似（"6 months ago" 会差出一天）。
+    </p>
+  </div>
 
   <!-- ================================================================ -->
   <h2 id="sec-split-extract">6.3 分块与抽取：为图而切，为图而抽</h2>
@@ -175,6 +203,25 @@ rels = RelationExtractor(confidence_threshold=0.6, bidirectional=True).extract_r
     provider or API key」——LLM 是可选项而非依赖项，呼应「确定性基础设施」的定位。
   </p>
 
+  <div class="box" style="border-left-color:var(--pass);">
+    <div class="box-title">✓ 对照真码：entity_aware 与 ml 后端都是真实现</div>
+    <p style="margin:.3rem 0;">
+      本节的两个关键主张经得起源码检验。<strong>其一</strong>，<code>split/methods.py</code> 的
+      <code>split_entity_aware</code> 确实是「先 NER 再切块」：先跑出实体列表拿到字符边界
+      （start_char/end_char），再按句子循环拼块，含实体边界的句子不许被切断——
+      与宣传语一字不差。<strong>其二</strong>，<code>ml</code> 后端是货真价实的 spaCy
+      （默认 <code>en_core_web_sm</code>），且做了进程级缓存——<code>spacy.load()</code> 约 120 ms，
+      重复构建 extractor 不会重复付这笔钱（<code>ner_extractor.py:150</code>）。
+    </p>
+    <p style="margin:.3rem 0;">
+      工程上更值得学的是<strong>回退链</strong>设计：<code>method=["llm", "ml", "pattern"]</code>
+      按序尝试，某一环不可用（没装 API key、spaCy 模型没下载）就静默跳到下一环，
+      还可开 <code>ensemble_voting</code> 让多后端投票。代价同样是「静默」：
+      你以为在用 ml，实际 spaCy 初始化失败后早已降级到 pattern——精度悄悄掉了，
+      日志里只有一行 warning。生产上建议显式指定单一后端，别依赖回退。
+    </p>
+  </div>
+
   <!-- ================================================================ -->
   <h2 id="sec-quality-gates">6.4 两道质量关卡：冲突检测与去重</h2>
 
@@ -193,7 +240,7 @@ rels = RelationExtractor(confidence_threshold=0.6, bidirectional=True).extract_r
       <tr><td><strong>类型冲突</strong> type</td><td>一个来源说它是 Organization，另一个说是 Product</td></tr>
       <tr><td><strong>关系冲突</strong> relationship</td><td>A 说 alice worksFor acme，B 说 worksFor globex</td></tr>
       <tr><td><strong>时间冲突</strong> temporal</td><td>同一事实的时间窗互相打架</td></tr>
-      <tr><td><strong>逻辑冲突</strong> logical</td><td>违反互斥公理：同一人同时是 Manager 和 Intern（第 2 章 disjointWith 的工程化）</td></tr>
+      <tr><td><strong>逻辑冲突</strong> logical</td><td>类型互斥冲突：同一实体被标成 Person 和 Organization（思想源自第 2 章 disjointWith，实现见下方对照真码）</td></tr>
     </tbody>
   </table>
 
@@ -207,13 +254,51 @@ tracker.register_source("master_2024.pdf", credibility_score=0.9)   # 主协议�
 tracker.register_source("amendment.pdf",  credibility_score=0.85)
 
 resolved = ConflictResolver().resolve_conflicts(conflicts, strategy="credibility_weighted")
-# 其他策略：most_recent（信最新的）、voting（多数票）</code></pre>
+# 全部七种策略见下方对照真码；默认是 voting</code></pre>
 
   <p>
-    注意设计哲学：<strong>检测和仲裁分离</strong>。<code>ConflictDetector</code> 只报Conflict
-    （带 severity），裁决权在 <code>ConflictResolver</code> 的策略里，而策略需要的事实（谁更可信）
-    由 <code>SourceTracker</code> 的可信度分数提供。监管场景偏爱这种结构——裁决理由可查。
+    注意设计哲学：<strong>检测和仲裁分离</strong>。<code>ConflictDetector</code> 只报 Conflict
+    （带 severity），裁决权在 <code>ConflictResolver</code> 的策略里；七种策略中只有
+    <code>credibility_weighted</code> 会去问 <code>SourceTracker</code> 的可信度分数，
+    其余策略根本不看来源。监管场景偏爱这种结构——裁决理由可查。
   </p>
+
+  <div class="box" style="border-left-color:var(--fail);">
+    <div class="box-title">⚠ 对照真码：检测是分组比较，仲裁是七种算术——没有推理机，也没有模型</div>
+    <p style="margin:.3rem 0;">
+      五类检测（<code>conflicts/conflict_detector.py</code>）全部是普通 Python：
+      值/类型/关系冲突 = 按实体 ID（或主语+谓语）分组后逐组比对；时间冲突 = 手写的区间相交判断。
+      最接近「本体推理」的逻辑冲突，实现是一张<strong>写死的互斥表</strong>（<code>conflict_detector.py:1048</code>）：
+    </p>
+    <pre><code>incompatible_types = {
+    "Person": ["Organization", "Company", "Institution"],
+    "Organization": ["Person"],
+    "Company": ["Person"],
+    "Location": ["Person", "Organization"],
+}</code></pre>
+    <p style="margin:.3rem 0;">
+      它不从本体文件读 <code>disjointWith</code> 公理，也不调任何 reasoner——就是查表。
+      表里只有五个类型：你自定义的「Manager 与 Intern 互斥」这类公理<strong>不会被检测</strong>。
+      全仓库真正的符号推理（HermiT/Pellet）只在 <code>ontology/ontology_validator.py</code>
+      校验本体本身时使用，与这道质量关卡是两个隔离的世界——关卡跑在热路径上，必须便宜。
+    </p>
+    <p style="margin:.3rem 0;">
+      仲裁端（<code>conflict_resolver.py:70</code>）实际有<strong>七种</strong>策略：
+      <code>voting</code>（默认，Counter 数票）/<code>credibility_weighted</code>
+      （权重 = 来源置信度 × SourceTracker 可信度，逐值累加取最大）/<code>most_recent</code>
+      （比 <code>metadata.timestamp</code>）/<code>first_seen</code>（取第一个值）/
+      <code>highest_confidence</code>（比来源 confidence）/<code>manual_review</code> 与
+      <code>expert_review</code>（不裁决，打标记留给人）。三个工程细节：
+    </p>
+    <ul style="margin:.3rem 0;">
+      <li>又见<strong>写死的分数</strong>：most_recent 恒报 confidence 0.8、first_seen 恒报 0.7——
+        和 6.2 的 EntityNormalizer 一个套路，这些「分数」是占位常量，不是计算结果；</li>
+      <li><code>most_recent</code> 在<strong>没有任何来源带时间戳时，静默退化成取第一个值</strong>，
+        且备注照样写 "Resolved by most recent value"——听起来裁决了，其实是兜底；</li>
+      <li><code>set_resolution_rule(entity_id, property_name, strategy)</code> 可给特定字段钉死策略
+        （如「估值字段永远走 expert_review」）——这是治理钩子，值得记住。</li>
+    </ul>
+  </div>
 
   <p><strong>第二关：去重/实体解析</strong>（<code>semantica.deduplication</code>），第 1 章的 ACME 之问在这里落地：</p>
 
@@ -228,9 +313,13 @@ merged   = merger.merge_duplicates(entities, strategy="keep_most_complete")
 history  = merger.get_merge_history()</code></pre>
 
   <p>
-    两步法：<strong>blocking</strong> 先用廉价键（如域名、首字母桶）把 N×N 比较砍成近邻块
-    （CHANGELOG 记录过 63.6% 的候选生成提速），块内再算<strong>语义相似度</strong>（嵌入），
-    过阈值成组。<code>preserve_provenance=True</code> 必须开着：合并后的实体要记得
+    两步法：<strong>blocking</strong> 先用廉价键（<code>prefix</code> 首字母前缀、<code>token</code>
+    分词桶，可选开 Soundex 语音 blocking）把 N×N 比较砍成近邻块
+    （CHANGELOG 记录过 63.6% 的候选生成提速），块内再算<strong>多因子相似度</strong>。
+    注意默认配方（<code>deduplication/similarity_calculator.py:96</code>）是
+    <strong>字符串 0.6 / 属性 0.2 / 关系 0.2，嵌入权重默认 0.0</strong>——
+    开箱即用时是 Levenshtein/Jaro-Winkler 这类字符串算法在干活，语义嵌入匹配需要显式调
+    <code>embedding_weight</code> 并给实体配上向量。<code>preserve_provenance=True</code> 必须开着：合并后的实体要记得
     「我由 e1、e2、e3 合并而来，各自来自哪个文件」——否则下次审计就断了线索。
     这就是「provenance-preserving merge」，README 反复强调的产品级细节。
   </p>
@@ -293,15 +382,37 @@ kg = GraphBuilder(merge_entities=True, enable_temporal=True).build(docs)
         摄取层的使命是消灭格式差异，规范化是抽取与推断质量的地基。</li>
     <li><strong>分块为图服务</strong>：entity_aware / relation_aware 保证实体与三元组不被切断——GraphRAG 的召回单元。</li>
     <li><strong>抽取三后端</strong>：ml（默认、本地、零依赖）/ pattern / llm（可选增强）——「确定性」定位的体现。</li>
-    <li><strong>两道质量关卡</strong>：冲突检测五类（值/类型/关系/时间/逻辑）+ 三仲裁策略（credibility_weighted /
-        most_recent / voting），检测与仲裁分离；去重两步法（blocking 砍比较量 + 语义相似度过阈值），
-        合并必须 <code>preserve_provenance=True</code>。</li>
+    <li><strong>两道质量关卡</strong>：冲突检测五类（值/类型/关系/时间/逻辑，全是分组比较与查表）+
+        七仲裁策略（credibility_weighted / most_recent / voting / first_seen / highest_confidence /
+        manual_review / expert_review），检测与仲裁分离；去重两步法（blocking 砍比较量 + 多因子相似度过阈值，
+        嵌入默认权重 0），合并必须 <code>preserve_provenance=True</code>。</li>
     <li><strong>双时间态</strong>：valid time（世界为真区间）× recorded time（进入系统时刻）两轴独立；
         <code>state_at</code> / <code>query_time_range</code> 分别按两轴查询。</li>
     <li><code>GraphBuilder.build()</code>（graph_builder.py:422）输入宽容（文本/对象/字典），输出永远是 KG 字典。</li>
   </ul>
 
-  <div class="box pitfalls">
+  <div class="box key">
+    <div class="box-title">★ 骨架 vs 血肉：本章模块的实现成熟度地图</div>
+    <p style="margin:.3rem 0;">
+      把本章各处的「对照真码」收拢成一张地图。读这个仓库需要三种视角：API 表面、设计哲学，
+      以及<strong>实现成熟度</strong>——哪些能力是填好血肉的，哪些是等填的骨架。
+    </p>
+    <ul style="margin:.3rem 0;">
+      <li><strong>血肉（经得起源码检验）</strong>：entity_aware 分块（真 NER + 字符边界）、
+          ml 抽取后端（spaCy + 进程级缓存 + 回退链）、blocking + 多因子相似度、
+          provenance-preserving merge、双时间态查询、五类冲突的分组检测。</li>
+      <li><strong>骨架（占位或降级实现）</strong>：EntityNormalizer 的置信度（写死 0.8）、
+          cultural variations（原样返回）、DateNormalizer（仅一条英文正则，失败静默返回今天）、
+          逻辑冲突（五个类型的硬编码表，disjointWith 公理不生效）、
+          resolver 的 0.8/0.7 置信度常量、去重的嵌入权重（默认 0）。</li>
+    </ul>
+    <p style="margin:.3rem 0;">
+      价值不在于挑刺：第 7 章你会看到 README 自己也会明示局限（Rete 匹配器从简）。
+      <strong>知道边界的能力才是可用的能力</strong>——选型时把左列当卖点，把右列当路线图。
+    </p>
+  </div>
+
+  <div class="box pitfall">
     <div class="box-title">常见误区</div>
     <ul style="margin:0;">
       <li><strong>跳过规范化直接抽取</strong>——类型/日期/数字不归一，第 9 章的类推断直接垃圾进垃圾出。</li>
@@ -380,12 +491,12 @@ kg = GraphBuilder(merge_entities=True, enable_temporal=True).build(docs)
     </div>
 
     <div class="q" data-id="6-6" data-type="mcq" data-correct='["b"]'
-         data-answer="B —— blocking：用廉价键把 N×N 比较切成小邻块，块内再算语义相似度。"
+         data-answer="B —— blocking：用廉价键把 N×N 比较切成小邻块，块内再算多因子相似度。"
          data-rationale="全量嵌入比较是 O(n²)，大图跑不动；blocking（如按域名/首字母分桶）先砍掉 99% 不可能对（CHANGELOG 记录候选生成提速 63.6%），块内再用嵌入相似度过阈值。A 的联合索引是数据库概念；C 是图数据库存储；D 顺序反了。"
          data-review="sec-quality-gates">
       <div class="prompt"><span class="qnum">Q6.</span> DuplicateDetector 处理十万级实体时避免 O(n²) 全量两两比较的关键技术是？</div>
       <label class="opt"><input type="radio" name="q-6-6" value="a"> A. 给实体建联合索引</label>
-      <label class="opt"><input type="radio" name="q-6-6" value="b"> B. blocking：先按廉价键分桶，桶内再算语义相似度</label>
+      <label class="opt"><input type="radio" name="q-6-6" value="b"> B. blocking：先按廉价键分桶，桶内再算多因子相似度</label>
       <label class="opt"><input type="radio" name="q-6-6" value="c"> C. 把实体全部导入 Neo4j</label>
       <label class="opt"><input type="radio" name="q-6-6" value="d"> D. 先算相似度再分桶</label>
       <div class="feedback"></div>
@@ -425,8 +536,8 @@ kg = GraphBuilder(merge_entities=True, enable_temporal=True).build(docs)
     </div>
 
     <div class="q" data-id="6-10" data-type="short"
-         data-key-points='["形状演变链：文件→净文本→分块→实体/关系→KG字典→RDF，每步有明确产物","entity_aware/relation_aware 分块保住实体与三元组完整（GraphRAG 召回单元）","冲突五类（值/类型/关系/时间/逻辑）与三仲裁策略，检测与仲裁分离、裁决可查","去重两步法：blocking 砍比较量 + 语义相似度过阈值；合并保留 provenance","双时间态：valid（世界为真）× recorded（系统已知）两轴独立，state_at 同时过滤两轴"]'
-         data-answer="数据形状沿流水线演变：文件 →（ingest）统一文档列表 →（normalize）净文本 →（split，entity_aware 保实体不切断）分块 →（extract，ml/pattern/llm 后端）实体关系列表 →（conflicts 五类检测 + credibility/most_recent/voting 仲裁）→（dedup：blocking+语义相似度，preserve_provenance 合并）→（GraphBuilder）KG 字典（可含双时间态事实）→（export）RDF。双时间态给每个事实两根轴：valid time（世界里为真区间）与 recorded time（进入系统时刻），state_at 同时过滤两轴，能区分「当时事实上如何」与「当时我们以为什么」。"
+         data-key-points='["形状演变链：文件→净文本→分块→实体/关系→KG字典→RDF，每步有明确产物","entity_aware/relation_aware 分块保住实体与三元组完整（GraphRAG 召回单元）","冲突五类（值/类型/关系/时间/逻辑，分组比较与查表）与七种仲裁策略，检测与仲裁分离、裁决可查","去重两步法：blocking 砍比较量 + 多因子相似度过阈值（嵌入默认权重 0）；合并保留 provenance","双时间态：valid（世界为真）× recorded（系统已知）两轴独立，state_at 同时过滤两轴"]'
+         data-answer="数据形状沿流水线演变：文件 →（ingest）统一文档列表 →（normalize）净文本 →（split，entity_aware 保实体不切断）分块 →（extract，ml/pattern/llm 后端）实体关系列表 →（conflicts 五类检测 + 七种策略仲裁，默认 voting）→（dedup：blocking+多因子相似度，preserve_provenance 合并）→（GraphBuilder）KG 字典（可含双时间态事实）→（export）RDF。双时间态给每个事实两根轴：valid time（世界里为真区间）与 recorded time（进入系统时刻），state_at 同时过滤两轴，能区分「当时事实上如何」与「当时我们以为什么」。"
          data-rationale="五个要点：形状链、分块原则、冲突体系、去重方法、双时间态。这套数据流是第 8 章 OntologyGenerator 输入的直接上游。"
          data-review="sec-recap">
       <div class="prompt"><span class="qnum">Q10.</span> 综合：完整描述一批文档从目录到 Turtle 的数据形状演变；两道质量关卡各自怎么工作；双时间态的两根轴如何协同。</div>
